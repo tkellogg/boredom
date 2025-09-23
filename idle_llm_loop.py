@@ -583,8 +583,6 @@ def handle_tool_calls(
                     )
                 tool_call_ids.append(str(call_id))
                 state.tool_runs.append(tool_payload["log"])
-                conversation_entry = tool_payload.get("conversation_entry") or tool_payload["message"]
-                state.conversation.append(conversation_entry)
                 tool_messages.append(tool_payload["message"])
         if not tool_messages:
             continue
@@ -654,6 +652,26 @@ def handle_tool_calls(
     return state
 
 
+def _format_tool_display(name: Optional[str]) -> str:
+    if not name:
+        return "Tool Output"
+    tokens = [token for token in str(name).replace("-", " ").replace("_", " ").split() if token]
+    if not tokens:
+        return "Tool Output"
+    normalized = []
+    special_upper = {"svg", "url", "html", "api", "llm"}
+    for token in tokens:
+        lower = token.lower()
+        if lower in special_upper:
+            normalized.append(lower.upper())
+        else:
+            normalized.append(lower.capitalize())
+    label = " ".join(normalized)
+    if not label.lower().endswith("output"):
+        label = f"{label} Output"
+    return label
+
+
 def _stringify_tool_result_output(content_list: List[Dict[str, Any]]) -> str:
     """Condense structured tool output into a text block for provider submission."""
     parts: List[str] = []
@@ -703,7 +721,22 @@ def build_tool_result_message(
                 "text": "",
             }
         ]
+    log_data: Dict[str, Any] = dict(log_entry) if isinstance(log_entry, dict) else {"raw": log_entry}
     output_text = _stringify_tool_result_output(content_list)
+    tool_name = (log_data.get("tool") or "") if isinstance(log_data, dict) else ""
+    tool_name_lower = tool_name.lower()
+    display_content = content_list
+    if tool_name_lower in {"render_svg", "rendersvg"}:
+        svg_path = log_data.get("svg_path") if isinstance(log_data, dict) else None
+        message_text = (
+            f"SVG saved to {svg_path}" if svg_path else "SVG rendered"
+        )
+        display_content = [
+            {
+                "type": "output_text",
+                "text": message_text,
+            }
+        ]
     tool_message: Dict[str, Any] = {
         "type": "function_call_output",
         "call_id": call_id,
@@ -712,12 +745,28 @@ def build_tool_result_message(
     conversation_entry: Dict[str, Any] = {
         "role": "tool",
         "tool_call_id": call_id,
-        "content": content_list,
+        "content": display_content,
         "submitted_output_text": output_text or "",
     }
+    if tool_name:
+        conversation_entry["tool"] = tool_name
+        conversation_entry["tool_display"] = _format_tool_display(tool_name)
+    if display_content is not content_list:
+        conversation_entry["tool_raw_content"] = content_list
+    if isinstance(log_data, dict):
+        log_data.setdefault("tool_call_id", call_id)
+        log_data.setdefault("output_text", output_text)
+        if content_list:
+            log_data.setdefault("output_content", content_list)
+    else:
+        log_data = {
+            "tool_call_id": call_id,
+            "output_text": output_text,
+            "raw_log": log_entry,
+        }
     return {
         "message": tool_message,
-        "log": log_entry,
+        "log": log_data,
         "conversation_entry": conversation_entry,
     }
 
