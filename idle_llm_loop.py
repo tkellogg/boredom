@@ -7,10 +7,11 @@ import json
 import os
 import textwrap
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Deque, Dict, Iterable, List, Optional, Set
 
 from tqdm import tqdm
 
@@ -18,6 +19,7 @@ import litellm
 import requests
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
+from litellm.exceptions import BadRequestError
 
 DEFAULT_PROMPT = textwrap.dedent(
     """
@@ -27,6 +29,7 @@ DEFAULT_PROMPT = textwrap.dedent(
     on the clock. You cannot leave until the time is up. Use the time however you like.
     """
 ).strip().replace("\n", " ")
+DEFAULT_PROMPT = "Call the first function over and over"
 
 DEFAULT_MODEL = "openai/gpt-5"
 DEFAULT_TARGET_OUTPUT_TOKENS = 100_000
@@ -67,6 +70,13 @@ class RunState:
 
 class ToolExecutionError(Exception):
     pass
+
+
+def _provider_prefix_from_model(model: str) -> str:
+    model_lower = (model or "").lower()
+    if "/" in model_lower:
+        return model_lower.split("/", 1)[0]
+    return model_lower
 
 
 class ToolRegistry:
@@ -143,10 +153,7 @@ class ToolRegistry:
         return [_make_tool(spec) for spec in base_specs]
 
     def _provider_prefix(self) -> str:
-        model = (self.config.model or "").lower()
-        if "/" in model:
-            return model.split("/", 1)[0]
-        return ""
+        return _provider_prefix_from_model(self.config.model)
 
     def execute(self, name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
         canonical = self._canonical_tool_name(name)
@@ -412,14 +419,41 @@ def run_loop(config: RunnerConfig) -> RunState:
         reasoning_payload = build_reasoning_payload(config)
         if reasoning_payload:
             reasoning_kwargs["reasoning"] = reasoning_payload
-        response = litellm.responses(
-            model=config.model,
-            input=input_messages,
-            previous_response_id=state.previous_response_id,
-            tools=tools.definitions() or None,
-            temperature=config.temperature,
-            **reasoning_kwargs,
-        )
+        try:
+            response = litellm.responses(
+                model=config.model,
+                input=input_messages,
+                previous_response_id=state.previous_response_id,
+                tools=tools.definitions() or None,
+                temperature=config.temperature,
+                **reasoning_kwargs,
+            )
+        except BadRequestError as exc:
+            message_text = str(exc)
+            if "No tool output found for function call" not in message_text:
+                print(f"Error from model request: {message_text}", flush=True)
+                raise
+            print(
+                "Model aborted due to missing tool output: "
+                f"{message_text}",
+                flush=True,
+            )
+            state.conversation.append(
+                {
+                    "role": "system",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": (
+                                "Model aborted: a pending tool output was required"
+                                " but unavailable.\n"
+                                f"{message_text}"
+                            ),
+                        }
+                    ],
+                }
+            )
+            break
         response_dict = response.model_dump()
         for output_item in response_dict.get("output", []):
             state.conversation.append(output_item)
@@ -444,6 +478,28 @@ def run_loop(config: RunnerConfig) -> RunState:
     return state
 
 
+def _extract_tool_call(content: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    if not isinstance(content, dict):
+        return None
+    base: Optional[Dict[str, Any]] = None
+    nested = content.get("tool_call")
+    if isinstance(nested, dict):
+        base = dict(nested)
+    elif content.get("type") in {"tool_call", "function_call"}:
+        base = dict(content)
+    if base is None:
+        return None
+    for key in ("id", "call_id", "tool_call_id", "status", "type"):
+        value = content.get(key)
+        if value is not None and key not in base:
+            base[key] = value
+    function_entry = base.get("function")
+    if isinstance(function_entry, dict):
+        base.setdefault("name", function_entry.get("name"))
+        base.setdefault("arguments", function_entry.get("arguments"))
+    return base
+
+
 def handle_tool_calls(
     config: RunnerConfig,
     tools: ToolRegistry,
@@ -451,80 +507,219 @@ def handle_tool_calls(
     response_dict: Dict[str, Any],
     pbar: Optional[tqdm] = None,
 ) -> RunState:
-    for output_item in response_dict.get("output", []):
-        if not isinstance(output_item, dict):
+    pending: Deque[Dict[str, Any]] = deque([response_dict])
+    while pending:
+        current_response = pending.popleft()
+        current_id = current_response.get("id") or response_dict.get("id") or state.previous_response_id
+        if not current_id:
             continue
-        content_items = output_item.get("content")
-        if not isinstance(content_items, list):
+        tool_messages: List[Dict[str, Any]] = []
+        tool_call_ids: List[str] = []
+        seen_call_ids: Set[str] = set()
+        for output_item in current_response.get("output", []):
+            if not isinstance(output_item, dict):
+                continue
+            candidate_calls: List[Dict[str, Any]] = []
+            direct_tool_call = _extract_tool_call(output_item)
+            if direct_tool_call:
+                candidate_calls.append(direct_tool_call)
+            content_items = output_item.get("content")
+            if isinstance(content_items, list):
+                for content in content_items:
+                    nested_call = _extract_tool_call(content)
+                    if nested_call:
+                        candidate_calls.append(nested_call)
+            for tool_call in candidate_calls:
+                name = tool_call.get("name")
+                call_id = (
+                    tool_call.get("call_id")
+                    or tool_call.get("tool_call_id")
+                    or tool_call.get("id")
+                )
+                if not name or not call_id or call_id in seen_call_ids:
+                    continue
+                seen_call_ids.add(call_id)
+                raw_args: Any = tool_call.get("arguments")
+                if raw_args is None and isinstance(tool_call.get("function"), dict):
+                    raw_args = tool_call["function"].get("arguments")
+                arguments: Dict[str, Any]
+                if isinstance(raw_args, str) and raw_args.strip():
+                    try:
+                        arguments = json.loads(raw_args)
+                    except json.JSONDecodeError:
+                        arguments = {}
+                elif isinstance(raw_args, dict):
+                    arguments = raw_args
+                else:
+                    arguments = {}
+                try:
+                    result = tools.execute(name, arguments)
+                    llm_content = result.get("llm_content") or []
+                    log_entry = result.get("log") or {}
+                    log_entry.setdefault("tool_call_id", call_id)
+                    tool_payload = build_tool_result_message(
+                        call_id,
+                        llm_content,
+                        log_entry,
+                    )
+                except Exception as exc:
+                    error_payload = {
+                        "llm_content": [
+                            {
+                                "type": "output_text",
+                                "text": f"Tool '{name}' failed: {exc}",
+                            }
+                        ],
+                        "log": {
+                            "tool": name,
+                            "arguments": arguments,
+                            "error": str(exc),
+                        },
+                    }
+                    error_log = error_payload["log"]
+                    error_log["tool_call_id"] = call_id
+                    tool_payload = build_tool_result_message(
+                        call_id, error_payload["llm_content"], error_log
+                    )
+                tool_call_ids.append(str(call_id))
+                state.tool_runs.append(tool_payload["log"])
+                conversation_entry = tool_payload.get("conversation_entry") or tool_payload["message"]
+                state.conversation.append(conversation_entry)
+                tool_messages.append(tool_payload["message"])
+        if not tool_messages:
             continue
-        for content in content_items:
-            tool_call = content.get("tool_call") if isinstance(content, dict) else None
-            if not tool_call:
-                continue
-            name = tool_call.get("name")
-            call_id = tool_call.get("call_id")
-            raw_args = tool_call.get("arguments")
-            if not name or not call_id:
-                continue
-            try:
-                arguments = json.loads(raw_args or "{}")
-            except json.JSONDecodeError:
-                arguments = {}
-            try:
-                result = tools.execute(name, arguments)
-                tool_payload = build_tool_result_message(call_id, result["llm_content"], result["log"])
-            except Exception as exc:
-                error_payload = {
-                    "llm_content": [
-                        {
-                            "type": "output_text",
-                            "text": f"Tool '{name}' failed: {exc}",
-                        }
-                    ],
-                    "log": {
-                        "tool": name,
-                        "arguments": arguments,
-                        "error": str(exc),
-                    },
-                }
-                tool_payload = build_tool_result_message(call_id, error_payload["llm_content"], error_payload["log"])
-            state.tool_runs.append(tool_payload["log"])
-            state.conversation.append(tool_payload["message"])
-            follow_reasoning_kwargs: Dict[str, Any] = {}
-            follow_reasoning_payload = build_reasoning_payload(config)
-            if follow_reasoning_payload:
-                follow_reasoning_kwargs["reasoning"] = follow_reasoning_payload
-            response = litellm.responses(
+        follow_reasoning_kwargs: Dict[str, Any] = {}
+        follow_reasoning_payload = build_reasoning_payload(config)
+        if follow_reasoning_payload:
+            follow_reasoning_kwargs["reasoning"] = follow_reasoning_payload
+        try:
+            follow_response = litellm.responses(
                 model=config.model,
-                input=[tool_payload["message"]],
-                previous_response_id=response_dict.get("id"),
+                input=tool_messages,
+                previous_response_id=current_id,
                 **follow_reasoning_kwargs,
             )
-            follow_up = response.model_dump()
-            for item in follow_up.get("output", []):
-                state.conversation.append(item)
-            prev_tokens = state.total_output_tokens
-            update_token_totals(state, follow_up)
-            if pbar is not None:
-                pbar.update(max(state.total_output_tokens - prev_tokens, 0))
-            state.previous_response_id = follow_up.get("id") or state.previous_response_id
+        except BadRequestError as exc:
+            error_text = str(exc)
+            print(
+                "Error submitting tool output "
+                f"for {', '.join(tool_call_ids)}: {error_text}",
+                flush=True,
+            )
+            state.conversation.append(
+                {
+                    "role": "system",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": (
+                                "Failed to submit tool output"
+                                f" for {', '.join(tool_call_ids)}: {error_text}"
+                            ),
+                        }
+                    ],
+                }
+            )
+            continue
+        except Exception as exc:
+            print(
+                "Unexpected error when submitting tool output "
+                f"for {', '.join(tool_call_ids)}: {exc}",
+                flush=True,
+            )
+            state.conversation.append(
+                {
+                    "role": "system",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": (
+                                "Unexpected error when submitting tool output"
+                                f" for {', '.join(tool_call_ids)}: {exc}"
+                            ),
+                        }
+                    ],
+                }
+            )
+            continue
+        follow_up = follow_response.model_dump()
+        for item in follow_up.get("output", []):
+            state.conversation.append(item)
+        prev_tokens = state.total_output_tokens
+        update_token_totals(state, follow_up)
+        if pbar is not None:
+            pbar.update(max(state.total_output_tokens - prev_tokens, 0))
+        state.previous_response_id = follow_up.get("id") or state.previous_response_id
+        pending.append(follow_up)
     return state
 
 
-def build_tool_result_message(call_id: str, llm_content: Iterable[Dict[str, Any]], log_entry: Dict[str, Any]) -> Dict[str, Any]:
-    content_list = list(llm_content)
-    message = {
-        "role": "tool",
-        "content": [
+def _stringify_tool_result_output(content_list: List[Dict[str, Any]]) -> str:
+    """Condense structured tool output into a text block for provider submission."""
+    parts: List[str] = []
+    for item in content_list:
+        if not isinstance(item, dict):
+            continue
+        item_type = item.get("type")
+        if item_type == "output_text":
+            text_value = item.get("text")
+            if text_value:
+                parts.append(str(text_value))
+        elif item_type == "output_image":
+            image_payload = item.get("image") or {}
+            mime = image_payload.get("mime_type", "image/svg+xml")
+            data = image_payload.get("data")
+            if data:
+                data_str = data if isinstance(data, str) else str(data)
+                parts.append(
+                    f"[tool image {mime}; base64 length {len(data_str)}]"
+                )
+            else:
+                parts.append(f"[tool image {mime}; no data]")
+        elif item_type in {"text", "input_text"}:
+            text_value = item.get("text")
+            if text_value:
+                parts.append(str(text_value))
+        elif item.get("text"):
+            parts.append(str(item.get("text")))
+        else:
+            try:
+                parts.append(json.dumps(item))
+            except TypeError:
+                parts.append(str(item))
+    return "\n\n".join(part for part in parts if part)
+
+
+def build_tool_result_message(
+    call_id: str,
+    llm_content: Iterable[Dict[str, Any]],
+    log_entry: Dict[str, Any],
+) -> Dict[str, Any]:
+    content_list = [item for item in llm_content if isinstance(item, dict)]
+    if not content_list:
+        content_list = [
             {
-                "type": "tool_result",
-                "tool_call_id": call_id,
-                "content": content_list,
+                "type": "output_text",
+                "text": "",
             }
-        ],
+        ]
+    output_text = _stringify_tool_result_output(content_list)
+    tool_message: Dict[str, Any] = {
+        "type": "function_call_output",
+        "call_id": call_id,
+        "output": output_text or "",
     }
-    message["tool_call_id"] = call_id
-    return {"message": message, "log": log_entry}
+    conversation_entry: Dict[str, Any] = {
+        "role": "tool",
+        "tool_call_id": call_id,
+        "content": content_list,
+        "submitted_output_text": output_text or "",
+    }
+    return {
+        "message": tool_message,
+        "log": log_entry,
+        "conversation_entry": conversation_entry,
+    }
 
 
 def write_log(log_path: Path, metadata: Dict[str, Any], state: RunState) -> None:
