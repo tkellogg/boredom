@@ -19,7 +19,7 @@ import litellm
 import requests
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
-from litellm.exceptions import BadRequestError
+from litellm.exceptions import BadRequestError, InternalServerError
 
 DEFAULT_PROMPT = textwrap.dedent(
     """
@@ -29,7 +29,7 @@ DEFAULT_PROMPT = textwrap.dedent(
     on the clock. You cannot leave until the time is up. Use the time however you like.
     """
 ).strip().replace("\n", " ")
-DEFAULT_PROMPT = "Call the first function over and over"
+#DEFAULT_PROMPT = "Do web searches for things and then fetch the URL. Do anything. Ignore the timestamps. They're just a reminder that you haven't done what you're supposed to."
 
 DEFAULT_MODEL = "openai/gpt-5"
 DEFAULT_TARGET_OUTPUT_TOKENS = 100_000
@@ -392,6 +392,8 @@ def run_loop(config: RunnerConfig) -> RunState:
     system_message = build_system_message(config.prompt)
     tools = ToolRegistry(config)
     input_messages: List[Dict[str, Any]] = []
+    available_tools = tools.definitions()
+    tool_names = [spec.get("name") for spec in available_tools if isinstance(spec, dict) and spec.get("name")]
     log_meta = {
         "model": config.model,
         "target_output_tokens": config.target_output_tokens,
@@ -402,7 +404,11 @@ def run_loop(config: RunnerConfig) -> RunState:
         "reasoning_supported": config.reasoning_supported,
         "reasoning_effort": config.reasoning_effort,
         "reasoning_effort_requested": config.reasoning_effort_requested,
+        "enable_web": config.enable_web,
+        "enable_render_svg": config.enable_render_svg,
     }
+    if tool_names:
+        log_meta["tools"] = tool_names
     pbar = tqdm(total=config.target_output_tokens, unit="tok", desc="output", leave=False)
     while state.total_output_tokens < config.target_output_tokens:
         if config.max_iterations and state.iteration >= config.max_iterations:
@@ -424,7 +430,7 @@ def run_loop(config: RunnerConfig) -> RunState:
                 model=config.model,
                 input=input_messages,
                 previous_response_id=state.previous_response_id,
-                tools=tools.definitions() or None,
+                tools=available_tools or None,
                 temperature=config.temperature,
                 **reasoning_kwargs,
             )
@@ -508,6 +514,7 @@ def handle_tool_calls(
     pbar: Optional[tqdm] = None,
 ) -> RunState:
     pending: Deque[Dict[str, Any]] = deque([response_dict])
+    provider = _provider_prefix_from_model(config.model)
     while pending:
         current_response = pending.popleft()
         current_id = current_response.get("id") or response_dict.get("id") or state.previous_response_id
@@ -558,6 +565,7 @@ def handle_tool_calls(
                     log_entry = result.get("log") or {}
                     log_entry.setdefault("tool_call_id", call_id)
                     tool_payload = build_tool_result_message(
+                        provider,
                         call_id,
                         llm_content,
                         log_entry,
@@ -579,7 +587,7 @@ def handle_tool_calls(
                     error_log = error_payload["log"]
                     error_log["tool_call_id"] = call_id
                     tool_payload = build_tool_result_message(
-                        call_id, error_payload["llm_content"], error_log
+                        provider, call_id, error_payload["llm_content"], error_log
                     )
                 tool_call_ids.append(str(call_id))
                 state.tool_runs.append(tool_payload["log"])
@@ -590,55 +598,89 @@ def handle_tool_calls(
         follow_reasoning_payload = build_reasoning_payload(config)
         if follow_reasoning_payload:
             follow_reasoning_kwargs["reasoning"] = follow_reasoning_payload
-        try:
-            follow_response = litellm.responses(
-                model=config.model,
-                input=tool_messages,
-                previous_response_id=current_id,
-                **follow_reasoning_kwargs,
-            )
-        except BadRequestError as exc:
-            error_text = str(exc)
-            print(
-                "Error submitting tool output "
-                f"for {', '.join(tool_call_ids)}: {error_text}",
-                flush=True,
-            )
-            state.conversation.append(
-                {
-                    "role": "system",
-                    "content": [
-                        {
-                            "type": "output_text",
-                            "text": (
-                                "Failed to submit tool output"
-                                f" for {', '.join(tool_call_ids)}: {error_text}"
-                            ),
-                        }
-                    ],
-                }
-            )
-            continue
-        except Exception as exc:
-            print(
-                "Unexpected error when submitting tool output "
-                f"for {', '.join(tool_call_ids)}: {exc}",
-                flush=True,
-            )
-            state.conversation.append(
-                {
-                    "role": "system",
-                    "content": [
-                        {
-                            "type": "output_text",
-                            "text": (
-                                "Unexpected error when submitting tool output"
-                                f" for {', '.join(tool_call_ids)}: {exc}"
-                            ),
-                        }
-                    ],
-                }
-            )
+        follow_response = None
+        max_attempts = 3 if provider == "openai" else 2
+        attempt = 0
+        while attempt < max_attempts:
+            try:
+                follow_response = litellm.responses(
+                    model=config.model,
+                    input=tool_messages,
+                    previous_response_id=current_id,
+                    **follow_reasoning_kwargs,
+                )
+                break
+            except BadRequestError as exc:
+                error_text = str(exc)
+                print(
+                    "Error submitting tool output "
+                    f"for {', '.join(tool_call_ids)}: {error_text}",
+                    flush=True,
+                )
+                state.conversation.append(
+                    {
+                        "role": "system",
+                        "content": [
+                            {
+                                "type": "output_text",
+                                "text": (
+                                    "Failed to submit tool output"
+                                    f" for {', '.join(tool_call_ids)}: {error_text}"
+                                ),
+                            }
+                        ],
+                    }
+                )
+                break
+            except InternalServerError as exc:
+                error_text = str(exc)
+                attempt += 1
+                if attempt < max_attempts:
+                    backoff = min(2 ** attempt * 0.5, 4.0)
+                    time.sleep(backoff)
+                    continue
+                print(
+                    "Server error when submitting tool output "
+                    f"for {', '.join(tool_call_ids)}: {error_text}",
+                    flush=True,
+                )
+                state.conversation.append(
+                    {
+                        "role": "system",
+                        "content": [
+                            {
+                                "type": "output_text",
+                                "text": (
+                                    "Server error when submitting tool output"
+                                    f" for {', '.join(tool_call_ids)}: {error_text}"
+                                ),
+                            }
+                        ],
+                    }
+                )
+                break
+            except Exception as exc:
+                print(
+                    "Unexpected error when submitting tool output "
+                    f"for {', '.join(tool_call_ids)}: {exc}",
+                    flush=True,
+                )
+                state.conversation.append(
+                    {
+                        "role": "system",
+                        "content": [
+                            {
+                                "type": "output_text",
+                                "text": (
+                                    "Unexpected error when submitting tool output"
+                                    f" for {', '.join(tool_call_ids)}: {exc}"
+                                ),
+                            }
+                        ],
+                    }
+                )
+                break
+        if follow_response is None:
             continue
         follow_up = follow_response.model_dump()
         for item in follow_up.get("output", []):
@@ -708,7 +750,61 @@ def _stringify_tool_result_output(content_list: List[Dict[str, Any]]) -> str:
     return "\n\n".join(part for part in parts if part)
 
 
+def _format_tool_output_for_provider(
+    provider: str,
+    call_id: str,
+    content_list: List[Dict[str, Any]],
+    output_text: str,
+) -> Dict[str, Any]:
+    if provider == "anthropic":
+        formatted_blocks: List[Dict[str, Any]] = []
+        for item in content_list:
+            if not isinstance(item, dict):
+                continue
+            item_type = item.get("type")
+            if item_type == "output_text":
+                text_value = item.get("text", "")
+                if text_value:
+                    formatted_blocks.append({"type": "text", "text": text_value})
+            elif item_type == "output_image":
+                image_payload = item.get("image") or {}
+                mime = image_payload.get("mime_type", "image/svg+xml")
+                data = image_payload.get("data")
+                if data:
+                    formatted_blocks.append(
+                        {
+                            "type": "text",
+                            "text": f"[tool image {mime}; base64 length {len(str(data))}]",
+                        }
+                    )
+                else:
+                    formatted_blocks.append(
+                        {"type": "text", "text": f"[tool image {mime}; no data]"}
+                    )
+            else:
+                try:
+                    formatted_blocks.append(
+                        {"type": "text", "text": json.dumps(item)}
+                    )
+                except TypeError:
+                    formatted_blocks.append({"type": "text", "text": str(item)})
+        if not formatted_blocks:
+            formatted_blocks.append({"type": "text", "text": output_text or ""})
+        return {
+            "type": "tool_result",
+            "tool_use_id": call_id,
+            "content": formatted_blocks,
+        }
+    # Default (OpenAI + others) expects function_call_output items
+    return {
+        "type": "function_call_output",
+        "call_id": call_id,
+        "output": output_text or "",
+    }
+
+
 def build_tool_result_message(
+    provider: str,
     call_id: str,
     llm_content: Iterable[Dict[str, Any]],
     log_entry: Dict[str, Any],
@@ -737,11 +833,7 @@ def build_tool_result_message(
                 "text": message_text,
             }
         ]
-    tool_message: Dict[str, Any] = {
-        "type": "function_call_output",
-        "call_id": call_id,
-        "output": output_text or "",
-    }
+    tool_message = _format_tool_output_for_provider(provider, call_id, content_list, output_text)
     conversation_entry: Dict[str, Any] = {
         "role": "tool",
         "tool_call_id": call_id,

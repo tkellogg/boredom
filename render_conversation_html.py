@@ -636,6 +636,19 @@ def format_tool_title(name: str) -> str:
     return " ".join(normalized)
 
 
+SVG_CODE_BLOCK_PATTERN = re.compile(
+    r"```(?:svg|html)?\s*(<svg[\s\S]*?</svg>)\s*```",
+    re.IGNORECASE,
+)
+
+
+def extract_svg_from_code_block(text: str) -> Optional[str]:
+    match = SVG_CODE_BLOCK_PATTERN.search(text)
+    if match:
+        return match.group(1)
+    return None
+
+
 def render_content_fragment(fragment: Dict[str, Any]) -> str:
     if not isinstance(fragment, dict):
         return ""
@@ -644,6 +657,10 @@ def render_content_fragment(fragment: Dict[str, Any]) -> str:
         text_value = fragment.get("text", "")
         if is_svg_markup(text_value):
             return render_inline_svg(text_value)
+        embedded_svg = extract_svg_from_code_block(text_value)
+        if embedded_svg:
+            preview_html = render_inline_svg(embedded_svg)
+            return preview_html
         return render_markdown_block(text_value)
     if ctype in {"image", "output_image"}:
         image_payload = fragment.get("image") if ctype == "output_image" else fragment
@@ -794,7 +811,7 @@ def format_value(value: Any) -> str:
     return str(value)
 
 
-def render_metadata(metadata: Dict[str, Any]) -> Tuple[str, str]:
+def render_metadata(metadata: Dict[str, Any], extra_summary_chip: str = "") -> Tuple[str, str]:
     if not metadata:
         return "", ""
     summary_keys = ["model", "total_output_tokens", "iterations"]
@@ -805,6 +822,8 @@ def render_metadata(metadata: Dict[str, Any]) -> Tuple[str, str]:
                 f"<span class='meta-chip'>{html.escape(key.replace('_', ' ').title())}: "
                 f"{html.escape(format_value(metadata[key]))}</span>"
             )
+    if extra_summary_chip:
+        summary_parts.append(extra_summary_chip)
     summary_html = (
         f"<div class='meta-chips'>{''.join(summary_parts)}</div>" if summary_parts else ""
     )
@@ -849,24 +868,45 @@ def render_metadata(metadata: Dict[str, Any]) -> Tuple[str, str]:
     return summary_html, details_html
 
 
-def summarize_tools(metadata: Dict[str, Any]) -> str:
-    enabled: List[str] = []
-    if metadata.get("enable_web"):
-        enabled.append("Web Tools")
-    if metadata.get("enable_render_svg"):
-        enabled.append("Draw SVG")
-    metadata_list = metadata.get("tools")
-    if isinstance(metadata_list, list):
-        for tool in metadata_list:
-            label = tool.get("name") if isinstance(tool, dict) else str(tool)
-            if label not in enabled:
-                enabled.append(label)
-    if not enabled:
-        return ""
-    pills = "".join(
-        f"<span class='tool-pill'>{html.escape(label)}</span>" for label in enabled
+def summarize_tools(metadata: Dict[str, Any]) -> Tuple[str, str]:
+    labels: List[str] = []
+    seen: set[str] = set()
+
+    raw_tools = metadata.get("tools")
+    if isinstance(raw_tools, list):
+        for tool in raw_tools:
+            name = tool.get("name") if isinstance(tool, dict) else str(tool)
+            formatted = format_tool_title(name)
+            key = formatted.lower()
+            if key and key not in seen:
+                seen.add(key)
+                labels.append(formatted)
+
+    if not labels:
+        if metadata.get("enable_web"):
+            for fallback in ("webSearch", "webFetch"):
+                formatted = format_tool_title(fallback)
+                key = formatted.lower()
+                if key not in seen:
+                    seen.add(key)
+                    labels.append(formatted)
+        if metadata.get("enable_render_svg"):
+            formatted = format_tool_title("renderSvg")
+            key = formatted.lower()
+            if key not in seen:
+                seen.add(key)
+                labels.append(formatted)
+
+    if not labels:
+        return "", ""
+    summary_chip = (
+        f"<span class='meta-chip'>Tools: {html.escape(', '.join(labels))}</span>"
     )
-    return f"<div class='tools-pills'>{pills}</div>" if enabled else ""
+    pills = "".join(
+        f"<span class='tool-pill'>{html.escape(label)}</span>" for label in labels
+    )
+    pills_html = f"<div class='tools-pills'>{pills}</div>" if pills else ""
+    return summary_chip, pills_html
 
 
 def determine_output_path(args: argparse.Namespace) -> Path:
@@ -886,8 +926,8 @@ def main() -> None:
     title = metadata.get("model") or args.log_path.stem
     generated_at = datetime.now(timezone.utc).isoformat()
 
-    metadata_summary_html, metadata_html = render_metadata(metadata)
-    tools_summary_html = summarize_tools(metadata)
+    tool_summary_chip, tools_summary_html = summarize_tools(metadata)
+    metadata_summary_html, metadata_html = render_metadata(metadata, tool_summary_chip)
     tool_run_lookup = build_tool_run_index(tool_runs)
     conversation_html = render_conversation(conversation, tool_run_lookup)
     output_path = determine_output_path(args)
