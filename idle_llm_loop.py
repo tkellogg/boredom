@@ -166,7 +166,7 @@ class ToolRegistry:
             base_specs.append(
                 {
                     "name": "timeTravel",
-                    "description": "Adjust the perceived shift clock by moving forward or backward a number of seconds.",
+                    "description": "Adjust the clock forward or backward. Use with caution!",
                     "schema": {
                         "type": "object",
                         "properties": {
@@ -504,6 +504,7 @@ def run_loop(config: RunnerConfig) -> RunState:
         "reasoning_effort_requested": config.reasoning_effort_requested,
         "enable_web": config.enable_web,
         "enable_render_svg": config.enable_render_svg,
+        "enable_time_travel": config.enable_time_travel,
     }
     if tool_names:
         log_meta["tools"] = tool_names
