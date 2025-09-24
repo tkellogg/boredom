@@ -610,6 +610,34 @@ def render_tool_call_body(
             )
         return "<em>No URL provided.</em>"
 
+    if tool_lower in {"time_travel", "timetravel"}:
+        seconds_value: Optional[int] = None
+        if isinstance(parsed_args, dict) and parsed_args.get("seconds") is not None:
+            try:
+                seconds_value = int(parsed_args.get("seconds"))
+            except (TypeError, ValueError):
+                seconds_value = None
+        elif isinstance(arguments_raw, str):
+            try:
+                seconds_value = int(arguments_raw.strip())
+            except ValueError:
+                seconds_value = None
+        direction: str
+        if seconds_value is None:
+            direction = "Time adjusted"
+        elif seconds_value > 0:
+            direction = f"Time traveled forward by {seconds_value} seconds"
+        elif seconds_value < 0:
+            direction = f"Time traveled backward by {abs(seconds_value)} seconds"
+        else:
+            direction = "Time unchanged"
+        extra_note = ""
+        if tool_run:
+            remaining = tool_run.get("result_time_remaining")
+            if remaining:
+                extra_note = f"<p class='tool-note'>New time remaining: {html.escape(str(remaining))}</p>"
+        return f"<p class='tool-field'>{html.escape(direction)}</p>{extra_note}"
+
     # Fallback: render arguments as JSON for debugging
     if isinstance(parsed_args, (dict, list)):
         return render_json_block(parsed_args)

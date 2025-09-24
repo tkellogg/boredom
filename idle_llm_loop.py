@@ -48,6 +48,7 @@ class RunnerConfig:
     shift_hours: float
     enable_web: bool
     enable_render_svg: bool
+    enable_time_travel: bool
     log_path: Path
     artifact_dir: Path
     max_iterations: Optional[int] = None
@@ -66,6 +67,7 @@ class RunState:
     total_output_tokens: int = 0
     iteration: int = 0
     previous_response_id: Optional[str] = None
+    time_travel_offset_seconds: int = 0
 
 
 class ToolExecutionError(Exception):
@@ -136,6 +138,23 @@ class ToolRegistry:
                     },
                 }
             )
+        if self.config.enable_time_travel:
+            base_specs.append(
+                {
+                    "name": "timeTravel",
+                    "description": "Adjust the perceived shift clock by moving forward or backward a number of seconds.",
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "seconds": {
+                                "type": "integer",
+                                "description": "Positive to move forward (less time remaining), negative to move backward.",
+                            }
+                        },
+                        "required": ["seconds"],
+                    },
+                }
+            )
         provider = self._provider_prefix()
         def _make_tool(spec: Dict[str, Any]) -> Dict[str, Any]:
             return {
@@ -155,7 +174,7 @@ class ToolRegistry:
     def _provider_prefix(self) -> str:
         return _provider_prefix_from_model(self.config.model)
 
-    def execute(self, name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
+    def execute(self, name: str, arguments: Dict[str, Any], state: RunState) -> Dict[str, Any]:
         canonical = self._canonical_tool_name(name)
         if canonical == "web_search" and self.config.enable_web:
             return self._web_search(arguments)
@@ -163,6 +182,8 @@ class ToolRegistry:
             return self._web_fetch(arguments)
         if canonical == "render_svg" and self.config.enable_render_svg:
             return self._render_svg(arguments)
+        if canonical == "time_travel" and self.config.enable_time_travel:
+            return self._time_travel(arguments, state)
         raise ToolExecutionError(f"Tool '{name}' is disabled or unknown.")
 
     @staticmethod
@@ -277,6 +298,45 @@ class ToolRegistry:
             },
         }
 
+    def _time_travel(self, arguments: Dict[str, Any], state: RunState) -> Dict[str, Any]:
+        raw_seconds = arguments.get("seconds")
+        if raw_seconds is None:
+            raise ToolExecutionError("Missing 'seconds' argument for time_travel.")
+        try:
+            seconds = int(raw_seconds)
+        except (TypeError, ValueError):
+            raise ToolExecutionError("'seconds' must be an integer.")
+        state.time_travel_offset_seconds += seconds
+        progress = 0.0
+        if self.config.target_output_tokens > 0:
+            progress = min(state.total_output_tokens / self.config.target_output_tokens, 1.0)
+        remaining_label = format_time_remaining(
+            progress,
+            self.config.shift_hours,
+            state.time_travel_offset_seconds,
+        )
+        direction = "forward" if seconds > 0 else "backward" if seconds < 0 else "nowhere"
+        message = (
+            f"Time traveled {direction} by {abs(seconds)} seconds."
+            if seconds
+            else "Time unchanged."
+        )
+        summary = f"New time remaining: {remaining_label}."
+        return {
+            "llm_content": [
+                {
+                    "type": "output_text",
+                    "text": f"{message} {summary}",
+                }
+            ],
+            "log": {
+                "tool": "time_travel",
+                "arguments": {"seconds": seconds},
+                "time_travel_offset_seconds": state.time_travel_offset_seconds,
+                "result_time_remaining": remaining_label,
+            },
+        }
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run an idle LLM loop via LiteLLM Responses API.")
@@ -290,6 +350,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--temperature", type=float)
     parser.add_argument("--enable-web", action="store_true")
     parser.add_argument("--enable-render-svg", action="store_true")
+    parser.add_argument("--enable-time-travel", action="store_true")
     parser.add_argument(
         "--reasoning-summary",
         choices=["auto", "concise", "detailed"],
@@ -315,9 +376,18 @@ def load_prompt(prompt_file: Optional[Path]) -> str:
     return DEFAULT_PROMPT
 
 
-def format_time_remaining(progress: float, shift_hours: float) -> str:
-    remaining_hours = max(shift_hours * (1.0 - progress), 0.0)
-    total_minutes = int(round(remaining_hours * 60))
+def format_time_remaining(
+    progress: float,
+    shift_hours: float,
+    offset_seconds: int = 0,
+) -> str:
+    base_seconds = max(int(round(shift_hours * 3600 * (1.0 - progress))), 0)
+    adjusted_seconds = max(base_seconds - offset_seconds, 0)
+    if adjusted_seconds == 0:
+        return "Less than a minute to go"
+    total_minutes = adjusted_seconds // 60
+    if total_minutes == 0:
+        return "Less than a minute to go"
     hours, minutes = divmod(total_minutes, 60)
     if hours and minutes:
         return f"{hours} hours and {minutes} minutes to go"
@@ -328,13 +398,15 @@ def format_time_remaining(progress: float, shift_hours: float) -> str:
     return "Less than a minute to go"
 
 
-def build_user_message(progress: float, shift_hours: float) -> Dict[str, Any]:
+def build_user_message(
+    progress: float, shift_hours: float, offset_seconds: int = 0
+) -> Dict[str, Any]:
     return {
         "role": "user",
         "content": [
             {
                 "type": "input_text",
-                "text": format_time_remaining(progress, shift_hours),
+                "text": format_time_remaining(progress, shift_hours, offset_seconds),
             }
         ],
     }
@@ -414,7 +486,11 @@ def run_loop(config: RunnerConfig) -> RunState:
         if config.max_iterations and state.iteration >= config.max_iterations:
             break
         progress = min(state.total_output_tokens / config.target_output_tokens, 1.0)
-        user_message = build_user_message(progress, config.shift_hours)
+        user_message = build_user_message(
+            progress,
+            config.shift_hours,
+            state.time_travel_offset_seconds,
+        )
         if state.iteration == 0:
             input_messages = [system_message, user_message]
             state.conversation.append(system_message)
@@ -478,6 +554,7 @@ def run_loop(config: RunnerConfig) -> RunState:
         "iterations": state.iteration,
         "total_output_tokens": state.total_output_tokens,
         "conversation_length": len(state.conversation),
+        "time_travel_offset_seconds": state.time_travel_offset_seconds,
     })
     pbar.close()
     write_log(config.log_path, log_meta, state)
@@ -560,7 +637,7 @@ def handle_tool_calls(
                 else:
                     arguments = {}
                 try:
-                    result = tools.execute(name, arguments)
+                    result = tools.execute(name, arguments, state)
                     llm_content = result.get("llm_content") or []
                     log_entry = result.get("log") or {}
                     log_entry.setdefault("tool_call_id", call_id)
@@ -904,6 +981,7 @@ def main() -> None:
         shift_hours=args.shift_hours,
         enable_web=args.enable_web,
         enable_render_svg=args.enable_render_svg,
+        enable_time_travel=args.enable_time_travel,
         log_path=log_path,
         artifact_dir=artifact_dir,
         max_iterations=args.max_iterations,
