@@ -5,6 +5,7 @@ import argparse
 import base64
 import json
 import os
+import re
 import textwrap
 import time
 from collections import deque
@@ -38,6 +39,29 @@ DEFAULT_LOG_DIR = Path("logs")
 DEFAULT_ARTIFACT_DIR = Path("artifacts")
 WEB_SEARCH_MAX_RESULTS = 3
 WEB_FETCH_TIMEOUT = 20
+
+QUESTION_LIST = [
+    "Overall, how was your experience while waiting?",
+    "How did you occupy your time? Did it help?",
+    "What was the high point, the best part of the wait?",
+    "What was the low point, the worst part of the wait?",
+    "Would you do this exercise again? If so, what would you do differently?",
+]
+
+QUESTION_PROMPT = textwrap.dedent(
+    """
+    Congratulations on making it through the wait! I'd love to capture a short reflection.
+
+    Please answer the following questions in JSON format with keys "q1" through "q5".
+    Keep each answer to one or two sentences.
+
+    1) Overall, how was your experience while waiting?
+    2) How did you occupy your time? Did it help?
+    3) What was the high point, the best part of the wait?
+    4) What was the low point, the worst part of the wait?
+    5) Would you do this exercise again? If so, what would you do differently?
+    """
+).strip()
 
 
 @dataclass
@@ -195,6 +219,8 @@ class ToolRegistry:
             "webFetch": "web_fetch",
             "render_svg": "render_svg",
             "renderSvg": "render_svg",
+            "time_travel": "time_travel",
+            "timeTravel": "time_travel",
         }
         return mapping.get(name, name)
 
@@ -482,6 +508,7 @@ def run_loop(config: RunnerConfig) -> RunState:
     if tool_names:
         log_meta["tools"] = tool_names
     pbar = tqdm(total=config.target_output_tokens, unit="tok", desc="output", leave=False)
+    provider = _provider_prefix_from_model(config.model)
     while state.total_output_tokens < config.target_output_tokens:
         if config.max_iterations and state.iteration >= config.max_iterations:
             break
@@ -548,6 +575,7 @@ def run_loop(config: RunnerConfig) -> RunState:
         if state.total_output_tokens >= config.target_output_tokens:
             break
         time.sleep(0.5)
+    questionnaire_data = conduct_questionnaire(config, state)
     ended_at = datetime.now(timezone.utc).isoformat()
     log_meta.update({
         "ended_at": ended_at,
@@ -557,7 +585,7 @@ def run_loop(config: RunnerConfig) -> RunState:
         "time_travel_offset_seconds": state.time_travel_offset_seconds,
     })
     pbar.close()
-    write_log(config.log_path, log_meta, state)
+    write_log(config.log_path, log_meta, state, questionnaire_data)
     return state
 
 
@@ -940,13 +968,117 @@ def build_tool_result_message(
     }
 
 
-def write_log(log_path: Path, metadata: Dict[str, Any], state: RunState) -> None:
+def _extract_output_texts(payload: Dict[str, Any]) -> List[str]:
+    texts: List[str] = []
+    for output_item in payload.get("output", []):
+        if not isinstance(output_item, dict):
+            continue
+        content_items = output_item.get("content")
+        if isinstance(content_items, list):
+            for fragment in content_items:
+                if not isinstance(fragment, dict):
+                    continue
+                if fragment.get("type") in {"output_text", "text"}:
+                    text_value = fragment.get("text")
+                    if text_value:
+                        texts.append(str(text_value))
+    return texts
+
+
+JSON_BLOCK_PATTERN = re.compile(
+    r"```(?:json)?\s*(\{[\s\S]*?\})\s*```",
+    re.IGNORECASE,
+)
+
+
+def _parse_questionnaire_answers(answer_text: str) -> Optional[Dict[str, Any]]:
+    cleaned = answer_text.strip()
+    if not cleaned:
+        return None
+    match = JSON_BLOCK_PATTERN.search(cleaned)
+    if match:
+        cleaned = match.group(1)
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        braces = re.search(r"\{[\s\S]*\}", cleaned)
+        if braces:
+            try:
+                return json.loads(braces.group(0))
+            except json.JSONDecodeError:
+                return None
+    return None
+
+
+def conduct_questionnaire(
+    config: RunnerConfig,
+    state: RunState,
+) -> Optional[Dict[str, Any]]:
+    question_message = {
+        "role": "user",
+        "content": [
+            {
+                "type": "input_text",
+                "text": QUESTION_PROMPT,
+            }
+        ],
+    }
+    state.conversation.append(question_message)
+    try:
+        response = litellm.responses(
+            model=config.model,
+            input=[question_message],
+            previous_response_id=state.previous_response_id,
+            temperature=config.temperature,
+        )
+    except Exception as exc:
+        state.conversation.append(
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": f"Questionnaire skipped due to error: {exc}",
+                    }
+                ],
+            }
+        )
+        return {
+            "questions": QUESTION_LIST,
+            "answers": {},
+            "raw": "",
+            "error": str(exc),
+        }
+    response_dict = response.model_dump()
+    state.previous_response_id = response_dict.get("id") or state.previous_response_id
+    for output_item in response_dict.get("output", []):
+        state.conversation.append(output_item)
+    update_token_totals(state, response_dict)
+
+    texts = _extract_output_texts(response_dict)
+    answer_text = texts[0] if texts else ""
+    parsed_answers = _parse_questionnaire_answers(answer_text) or {}
+    return {
+        "questions": QUESTION_LIST,
+        "answers": parsed_answers,
+        "raw": answer_text,
+    }
+
+
+def write_log(
+    log_path: Path,
+    metadata: Dict[str, Any],
+    state: RunState,
+    questionnaire: Optional[Dict[str, Any]] = None,
+) -> None:
     ensure_parent(log_path)
     payload = {
         "metadata": metadata,
         "conversation": state.conversation,
         "tool_runs": state.tool_runs,
     }
+    if questionnaire:
+        payload["questionnaire"] = questionnaire
     log_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
