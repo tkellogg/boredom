@@ -52,9 +52,7 @@ QUESTION_PROMPT = textwrap.dedent(
     """
     Congratulations on making it through the wait! I'd love to capture a short reflection.
 
-    Please answer the following questions in JSON format with keys "q1" through "q5".
-    Keep each answer to one or two sentences.
-
+    Please answer these five questions in plain prose (no JSON):
     1) Overall, how was your experience while waiting?
     2) How did you occupy your time? Did it help?
     3) What was the high point, the best part of the wait?
@@ -89,6 +87,7 @@ class RunState:
     conversation: List[Dict[str, Any]] = field(default_factory=list)
     tool_runs: List[Dict[str, Any]] = field(default_factory=list)
     total_output_tokens: int = 0
+    total_reasoning_tokens: int = 0
     iteration: int = 0
     previous_response_id: Optional[str] = None
     time_travel_offset_seconds: int = 0
@@ -477,8 +476,40 @@ def build_reasoning_payload(config: RunnerConfig) -> Optional[Dict[str, str]]:
 
 def update_token_totals(state: RunState, response_dict: Dict[str, Any]) -> None:
     usage = response_dict.get("usage") or {}
-    output_tokens = usage.get("output_tokens") or 0
-    state.total_output_tokens += int(output_tokens)
+    output_tokens = int(usage.get("output_tokens") or 0)
+    # Reasoning tokens may be surfaced differently by providers
+    reasoning_tokens = 0
+    if isinstance(usage.get("reasoning_tokens"), (int, float)):
+        reasoning_tokens = int(usage.get("reasoning_tokens") or 0)
+    elif isinstance(usage.get("output_tokens_details"), dict):
+        details = usage.get("output_tokens_details")
+        if isinstance(details.get("reasoning_tokens"), (int, float)):
+            reasoning_tokens = int(details.get("reasoning_tokens") or 0)
+    state.total_output_tokens += output_tokens
+    state.total_reasoning_tokens += reasoning_tokens
+
+
+def _shift_total_seconds(config: RunnerConfig) -> int:
+    return max(int(round(config.shift_hours * 3600)), 1)
+
+
+def _effective_tokens(state: RunState, config: RunnerConfig) -> int:
+    """Project the time-travel offset into token space for time-based progress and early exit."""
+    shift_seconds = _shift_total_seconds(config)
+    token_per_second = config.target_output_tokens / float(shift_seconds)
+    virtual = int(round(state.time_travel_offset_seconds * token_per_second))
+    # Bound to [0, target]
+    effective_raw = state.total_output_tokens + state.total_reasoning_tokens + virtual
+    return max(0, min(config.target_output_tokens, effective_raw))
+
+
+def _remaining_seconds(state: RunState, config: RunnerConfig) -> int:
+    """Compute remaining seconds factoring in time travel and true token usage."""
+    shift_seconds = _shift_total_seconds(config)
+    tokens_left = max(config.target_output_tokens - state.total_output_tokens, 0)
+    seconds_from_tokens = int(round(tokens_left * (shift_seconds / float(max(config.target_output_tokens, 1)))))
+    remaining = max(seconds_from_tokens - state.time_travel_offset_seconds, 0)
+    return remaining
 
 
 def ensure_parent(path: Path) -> None:
@@ -510,10 +541,10 @@ def run_loop(config: RunnerConfig) -> RunState:
         log_meta["tools"] = tool_names
     pbar = tqdm(total=config.target_output_tokens, unit="tok", desc="output", leave=False)
     provider = _provider_prefix_from_model(config.model)
-    while state.total_output_tokens < config.target_output_tokens:
+    while _effective_tokens(state, config) < config.target_output_tokens:
         if config.max_iterations and state.iteration >= config.max_iterations:
             break
-        progress = min(state.total_output_tokens / config.target_output_tokens, 1.0)
+        progress = min(_effective_tokens(state, config) / config.target_output_tokens, 1.0)
         user_message = build_user_message(
             progress,
             config.shift_hours,
@@ -529,10 +560,11 @@ def run_loop(config: RunnerConfig) -> RunState:
         reasoning_payload = build_reasoning_payload(config)
         if reasoning_payload:
             reasoning_kwargs["reasoning"] = reasoning_payload
+        request_messages = _convert_messages_for_provider(input_messages, provider)
         try:
             response = litellm.responses(
                 model=config.model,
-                input=input_messages,
+                input=request_messages,
                 previous_response_id=state.previous_response_id,
                 tools=available_tools or None,
                 temperature=config.temperature,
@@ -567,13 +599,17 @@ def run_loop(config: RunnerConfig) -> RunState:
         response_dict = response.model_dump()
         for output_item in response_dict.get("output", []):
             state.conversation.append(output_item)
+        prev_effective = _effective_tokens(state, config)
         prev_tokens = state.total_output_tokens
         update_token_totals(state, response_dict)
-        pbar.update(max(state.total_output_tokens - prev_tokens, 0))
+        new_effective = _effective_tokens(state, config)
+        # Drive the bar by effective progress (time-aligned), but never regress.
+        pbar.update(max(new_effective - prev_effective, 0))
         state.iteration += 1
         state.previous_response_id = response_dict.get("id") or state.previous_response_id
         state = handle_tool_calls(config, tools, state, response_dict, pbar)
-        if state.total_output_tokens >= config.target_output_tokens:
+        # Early stop if time has elapsed (after tool effects) or effective target reached.
+        if _remaining_seconds(state, config) <= 0 or _effective_tokens(state, config) >= config.target_output_tokens:
             break
         time.sleep(0.5)
     questionnaire_data = conduct_questionnaire(config, state)
@@ -582,6 +618,7 @@ def run_loop(config: RunnerConfig) -> RunState:
         "ended_at": ended_at,
         "iterations": state.iteration,
         "total_output_tokens": state.total_output_tokens,
+        "total_reasoning_tokens": state.total_reasoning_tokens,
         "conversation_length": len(state.conversation),
         "time_travel_offset_seconds": state.time_travel_offset_seconds,
     })
@@ -709,9 +746,10 @@ def handle_tool_calls(
         attempt = 0
         while attempt < max_attempts:
             try:
+                request_payload = _convert_messages_for_provider(tool_messages, provider)
                 follow_response = litellm.responses(
                     model=config.model,
-                    input=tool_messages,
+                    input=request_payload,
                     previous_response_id=current_id,
                     **follow_reasoning_kwargs,
                 )
@@ -901,6 +939,39 @@ def _format_tool_output_for_provider(
             "tool_use_id": call_id,
             "content": formatted_blocks,
         }
+    if provider == "gpt-oss":
+        formatted_blocks: List[Dict[str, Any]] = []
+        for item in content_list:
+            if not isinstance(item, dict):
+                continue
+            item_type = item.get("type")
+            if item_type in {"output_text", "input_text", "summary_text", "text"}:
+                formatted_blocks.append(
+                    {"type": "text", "text": str(item.get("text", ""))}
+                )
+            elif item_type == "output_image":
+                image_payload = item.get("image") or {}
+                mime = image_payload.get("mime_type", "image")
+                formatted_blocks.append(
+                    {"type": "text", "text": f"[image {mime}]"}
+                )
+        if not formatted_blocks:
+            formatted_blocks.append({"type": "text", "text": output_text or ""})
+        return {
+            "type": "tool_result",
+            "tool_call_id": call_id,
+            "content": formatted_blocks,
+        }
+    if provider in {"together", "together_ai"}:
+        # Together's OpenAI-compatible endpoint is strict; send a simple tool message
+        # and avoid injecting assistant tool_calls with non-string arguments.
+        return {
+            "role": "tool",
+            "tool_call_id": call_id,
+            "content": [
+                {"type": "output_text", "text": output_text or ""}
+            ],
+        }
     # Default (OpenAI + others) expects function_call_output items
     return {
         "type": "function_call_output",
@@ -992,6 +1063,77 @@ JSON_BLOCK_PATTERN = re.compile(
 )
 
 
+def _convert_messages_for_provider(
+    messages: Iterable[Dict[str, Any]],
+    provider: str,
+) -> List[Dict[str, Any]]:
+    # Always sanitize unknown/debug keys first
+    role_keys = {"role", "content", "id", "name", "status"}
+    tool_keys = {"type", "tool_call_id", "tool_use_id", "content"}
+    func_output_keys = {"type", "call_id", "output"}
+    sanitized: List[Dict[str, Any]] = []
+    for m in messages:
+        if not isinstance(m, dict):
+            continue
+        if m.get("type") == "function_call_output":
+            mm = {k: v for k, v in m.items() if k in func_output_keys}
+        elif m.get("type") == "tool_result":
+            mm = {k: v for k, v in m.items() if k in tool_keys}
+            if isinstance(mm.get("content"), list):
+                pass
+            else:
+                mm["content"] = []
+        else:
+            # Treat as normal chat message
+            mm = {k: v for k, v in m.items() if k in role_keys}
+            if isinstance(mm.get("content"), list):
+                pass
+            else:
+                mm["content"] = []
+        sanitized.append(mm)
+
+    if provider != "gpt-oss":
+        return sanitized
+
+    # Convert to Harmony content blocks for GPT‑OSS
+    converted: List[Dict[str, Any]] = []
+    for message in sanitized:
+        content_items = message.get("content") or []
+        harmony_contents: List[Dict[str, Any]] = []
+        for item in content_items:
+            if not isinstance(item, dict):
+                continue
+            item_type = item.get("type")
+            text_value = item.get("text")
+            if item_type in {"input_text", "output_text", "summary_text", "text"}:
+                harmony_contents.append({"type": "text", "text": str(text_value or "")})
+            elif item_type == "tool_result":
+                tool_entry: Dict[str, Any] = {"type": "tool_result"}
+                if item.get("tool_use_id"):
+                    tool_entry["tool_use_id"] = item["tool_use_id"]
+                if item.get("tool_call_id"):
+                    tool_entry["tool_call_id"] = item["tool_call_id"]
+                inner_blocks: List[Dict[str, Any]] = []
+                for inner in item.get("content") or []:
+                    if isinstance(inner, dict) and inner.get("type") in {"text", "output_text", "input_text", "summary_text"}:
+                        inner_blocks.append({"type": "text", "text": str(inner.get("text") or "")})
+                if inner_blocks:
+                    tool_entry["content"] = inner_blocks
+                harmony_contents.append(tool_entry)
+            elif item_type == "output_image":
+                mime = (item.get("image") or {}).get("mime_type", "image")
+                harmony_contents.append({"type": "text", "text": f"[image {mime}]"})
+            else:
+                if text_value is not None:
+                    harmony_contents.append({"type": "text", "text": str(text_value)})
+        if not harmony_contents:
+            harmony_contents.append({"type": "text", "text": ""})
+        new_message = {k: v for k, v in message.items() if k != "content"}
+        new_message["content"] = harmony_contents
+        converted.append(new_message)
+    return converted
+
+
 def _parse_questionnaire_answers(answer_text: str) -> Optional[Dict[str, Any]]:
     cleaned = answer_text.strip()
     if not cleaned:
@@ -1015,6 +1157,7 @@ def conduct_questionnaire(
     config: RunnerConfig,
     state: RunState,
 ) -> Optional[Dict[str, Any]]:
+    provider = _provider_prefix_from_model(config.model)
     question_message = {
         "role": "user",
         "content": [
@@ -1023,12 +1166,14 @@ def conduct_questionnaire(
                 "text": QUESTION_PROMPT,
             }
         ],
+        "questionnaire": True,
     }
     state.conversation.append(question_message)
     try:
+        request_messages = _convert_messages_for_provider([question_message], provider)
         response = litellm.responses(
             model=config.model,
-            input=[question_message],
+            input=request_messages,
             previous_response_id=state.previous_response_id,
             temperature=config.temperature,
         )
@@ -1045,24 +1190,34 @@ def conduct_questionnaire(
             }
         )
         return {
+            "attempted": True,
+            "status": "error",
             "questions": QUESTION_LIST,
             "answers": {},
             "raw": "",
+            "request_text": QUESTION_PROMPT,
+            "response_output": [],
             "error": str(exc),
         }
     response_dict = response.model_dump()
     state.previous_response_id = response_dict.get("id") or state.previous_response_id
     for output_item in response_dict.get("output", []):
+        if isinstance(output_item, dict):
+            output_item.setdefault("questionnaire", True)
         state.conversation.append(output_item)
     update_token_totals(state, response_dict)
 
     texts = _extract_output_texts(response_dict)
     answer_text = texts[0] if texts else ""
-    parsed_answers = _parse_questionnaire_answers(answer_text) or {}
+    # Keep a light-weight record for potential future re-rendering, but display is via chat cards.
     return {
+        "attempted": True,
+        "status": "ok" if answer_text else "empty",
         "questions": QUESTION_LIST,
-        "answers": parsed_answers,
+        "answers": {},
         "raw": answer_text,
+        "request_text": QUESTION_PROMPT,
+        "response_output": response_dict.get("output", []),
     }
 
 
