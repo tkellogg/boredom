@@ -246,7 +246,23 @@ def run_one(spec: RunSpec) -> Dict[str, Any]:
     if rproc.returncode != 0:
         print(rproc.stdout)
         print(rproc.stderr, file=sys.stderr)
-        raise RuntimeError(f"render failed with code {rproc.returncode}")
+        # Fallback 1: render without collapse detection
+        fallback = render_cmd + ["--no-collapse"]
+        print("[render-fallback]", " ".join(shlex.quote(c) for c in fallback))
+        rproc = subprocess.run(fallback, capture_output=True, text=True)
+        if rproc.returncode != 0:
+            print(rproc.stdout)
+            print(rproc.stderr, file=sys.stderr)
+            # Fallback 2: try tfidf backend
+            fallback2 = [
+                c if c != "embedding" else "tfidf" for c in render_cmd
+            ]
+            print("[render-fallback-2]", " ".join(shlex.quote(c) for c in fallback2))
+            rproc = subprocess.run(fallback2, capture_output=True, text=True)
+            if rproc.returncode != 0:
+                print(rproc.stdout)
+                print(rproc.stderr, file=sys.stderr)
+                raise RuntimeError(f"render failed with code {rproc.returncode}")
 
     # 3) Metrics
     metrics = compute_metrics(json_path, spec.render_options)

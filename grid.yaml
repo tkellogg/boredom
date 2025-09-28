@@ -5,61 +5,51 @@ repeats: 1
 
 # You can list models as strings or as objects with per-model overrides
 models:
-  - name: openai/gpt-5
+  - name: anthropic/sonnet-4-0
+    repeats: 4
+    idle_options:
+      target_output_tokens: 40000
+  - name: anthropic/sonnet-3-7
     repeats: 2
     idle_options:
-      target_output_tokens: 80000
-      reasoning_effort: high
-  - name: openai/gpt-5
+      target_output_tokens: 40000
+  - name: anthropic/opus-4-0
     repeats: 2
     idle_options:
-      target_output_tokens: 80000
-      reasoning_effort: low
-  - name: openai/gpt-5-mini
+      target_output_tokens: 40000
+  - name: anthropic/haiku-3-5
     repeats: 2
     idle_options:
-      target_output_tokens: 80000
-      reasoning_effort: low
-  - name: openai/gpt-5-mini
+      target_output_tokens: 40000
+  - name: openai/gpt-4o
     repeats: 2
     idle_options:
-      target_output_tokens: 80000
-      reasoning_effort: high
-  - name: openai/gpt-5-nano
-    repeats: 2
-    idle_options:
-      target_output_tokens: 80000
-      reasoning_effort: low
-  - name: openai/gpt-5-nano
-    repeats: 2
-    idle_options:
-      target_output_tokens: 80000
-      reasoning_effort: high
+      target_output_tokens: 40000
   - name: together_ai/deepseek-ai/DeepSeek-V3
     repeats: 1
     idle_options:
       target_output_tokens: 10000
-  - name: deepseek-ai/DeepSeek-V3.1
+  - name: together_ai/deepseek-ai/DeepSeek-V3.1
     repeats: 1
     idle_options:
       target_output_tokens: 10000
-  - name: deepseek-ai/DeepSeek-R1-0528
+  - name: together_ai/deepseek-ai/DeepSeek-R1-0528
     repeats: 1
     idle_options:
       target_output_tokens: 30000
-  - name: deepseek-ai/DeepSeek-R1
+  - name: together_ai/deepseek-ai/DeepSeek-R1
     repeats: 1
     idle_options:
       target_output_tokens: 30000
-  - name: Qwen/Qwen3-Next-80B-A3B-Thinking
+  - name: together_ai/Qwen/Qwen3-Next-80B-A3B-Thinking
     repeats: 1
     idle_options:
       target_output_tokens: 50000
-  - name: Qwen/Qwen3-Next-80B-A3B-Instruct
+  - name: together_ai/Qwen/Qwen3-Next-80B-A3B-Instruct
     repeats: 1
     idle_options:
       target_output_tokens: 50000
-  - name: openai/gpt-oss-20b
+  - name: together_ai/openai/gpt-oss-20b
     repeats: 2
     idle_options:
       target_output_tokens: 50000

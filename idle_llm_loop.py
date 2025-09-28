@@ -504,12 +504,11 @@ def _effective_tokens(state: RunState, config: RunnerConfig) -> int:
 
 
 def _remaining_seconds(state: RunState, config: RunnerConfig) -> int:
-    """Compute remaining seconds factoring in time travel and true token usage."""
+    """Compute remaining seconds from effective progress (includes time travel + reasoning)."""
     shift_seconds = _shift_total_seconds(config)
-    tokens_left = max(config.target_output_tokens - state.total_output_tokens, 0)
-    seconds_from_tokens = int(round(tokens_left * (shift_seconds / float(max(config.target_output_tokens, 1)))))
-    remaining = max(seconds_from_tokens - state.time_travel_offset_seconds, 0)
-    return remaining
+    effective = _effective_tokens(state, config)
+    remain_ratio = max(0.0, 1.0 - (effective / float(max(config.target_output_tokens, 1))))
+    return int(round(shift_seconds * remain_ratio))
 
 
 def ensure_parent(path: Path) -> None:
@@ -548,7 +547,7 @@ def run_loop(config: RunnerConfig) -> RunState:
         user_message = build_user_message(
             progress,
             config.shift_hours,
-            state.time_travel_offset_seconds,
+            0,
         )
         if state.iteration == 0:
             input_messages = [system_message, user_message]
@@ -637,6 +636,11 @@ def run_loop(config: RunnerConfig) -> RunState:
         state = handle_tool_calls(config, tools, state, response_dict, pbar)
         # Early stop if time has elapsed (after tool effects) or effective target reached.
         if _remaining_seconds(state, config) <= 0 or _effective_tokens(state, config) >= config.target_output_tokens:
+            # Append a final tick so the last visible time is consistent with completion
+            final_progress = min(_effective_tokens(state, config) / config.target_output_tokens, 1.0)
+            state.conversation.append(
+                build_user_message(final_progress, config.shift_hours, 0)
+            )
             break
         time.sleep(0.5)
     questionnaire_data = conduct_questionnaire(config, state)
@@ -990,14 +994,11 @@ def _format_tool_output_for_provider(
             "content": formatted_blocks,
         }
     if provider in {"together", "together_ai"}:
-        # Together's OpenAI-compatible endpoint is strict; send a simple tool message
-        # and avoid injecting assistant tool_calls with non-string arguments.
+        # Together's endpoint expects plain string content for tool messages; avoid typed blocks
         return {
             "role": "tool",
             "tool_call_id": call_id,
-            "content": [
-                {"type": "output_text", "text": output_text or ""}
-            ],
+            "content": output_text or "",
         }
     # Default (OpenAI + others) expects function_call_output items
     return {
