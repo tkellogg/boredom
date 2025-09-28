@@ -10,6 +10,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+from collapse_detection import CollapsedSpan, detect_collapsed_spans
+
 from markdown_it import MarkdownIt
 
 DEFAULT_HTML_DIR = Path("html")
@@ -426,6 +428,34 @@ main {{
   font-size: 0.85rem;
 }}
 
+/* Collapsed spans (repetitive behavior) */
+.collapsed-span {{
+  border-radius: 18px;
+  border: 1px solid rgba(37, 99, 235, 0.35);
+  background: rgba(37, 99, 235, 0.08);
+  padding: 10px 12px;
+  box-shadow: 0 14px 36px -26px rgba(37, 99, 235, 0.55);
+}}
+.collapsed-span summary {{
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 0.98rem;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}}
+.collapsed-span summary::-webkit-details-marker {{ display: none; }}
+.collapsed-summary-meta {{
+  color: var(--text-secondary);
+  font-size: 0.86rem;
+}}
+.collapsed-body {{
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}}
+
 .footer {{
   margin-top: 64px;
   font-size: 0.78rem;
@@ -483,6 +513,66 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=DEFAULT_HTML_DIR,
         help="Directory for rendered HTML when --output is not provided (default: html/).",
+    )
+    # Collapsed-state detection options
+    parser.add_argument(
+        "--no-collapse",
+        action="store_true",
+        help="Disable detection and collapsing of repetitive spans.",
+    )
+    parser.add_argument(
+        "--collapse-m-pct",
+        type=float,
+        default=0.30,
+        help="Window length as a fraction of assistant messages for matrix profile (default: 0.30).",
+    )
+    parser.add_argument(
+        "--collapse-threshold-pct",
+        type=float,
+        default=0.15,
+        help="Percentile threshold of profile to mark valleys (default: 0.15).",
+    )
+    parser.add_argument(
+        "--collapse-min-windows",
+        type=int,
+        default=3,
+        help="Minimum number of consecutive low-profile windows to form a collapsed span (default: 3).",
+    )
+    parser.add_argument(
+        "--collapse-min-messages",
+        type=int,
+        default=5,
+        help="Minimum assistant messages in a collapsed span (default: 5).",
+    )
+    parser.add_argument(
+        "--collapse-grow-sim",
+        type=float,
+        default=0.85,
+        help="Edge-grow cosine similarity threshold to expand spans (default: 0.85). Set <=0 to disable.",
+    )
+    parser.add_argument(
+        "--collapse-grow-max",
+        type=int,
+        default=0,
+        help="Max assistant messages to grow per span (0 means unlimited reasonable growth).",
+    )
+    parser.add_argument(
+        "--collapse-backend",
+        choices=["embedding", "tfidf"],
+        default="embedding",
+        help="Backend for similarity: 'embedding' (Hugging Face) or 'tfidf' (local). Default: embedding.",
+    )
+    parser.add_argument(
+        "--collapse-embedding-model",
+        type=str,
+        default="Snowflake/snowflake-arctic-embed-m",
+        help="HF model id for embeddings when using --collapse-backend embedding.",
+    )
+    parser.add_argument(
+        "--collapse-embedding-batch-size",
+        type=int,
+        default=64,
+        help="Batch size for embedding inference (default: 64).",
     )
     return parser.parse_args()
 
@@ -876,30 +966,37 @@ def build_tool_run_index(tool_runs: List[Dict[str, Any]]) -> Dict[str, Dict[str,
     return lookup
 
 
-def render_conversation(
+def _render_conversation_range(
     conversation: List[Dict[str, Any]],
-    tool_run_lookup: Optional[Dict[str, Dict[str, Any]]] = None,
-) -> str:
+    start: int,
+    end: int,
+    tool_run_lookup: Optional[Dict[str, Dict[str, Any]]],
+    pending_reasoning: Optional[str],
+) -> Tuple[List[str], Optional[str]]:
     items: List[str] = []
-    pending_reasoning: Optional[str] = None
-
-    for entry in conversation:
+    pr = pending_reasoning
+    for idx in range(start, end + 1):
+        entry = conversation[idx]
         if not isinstance(entry, dict):
             continue
         if entry.get("type") == "reasoning":
-            pending_reasoning = render_reasoning(entry)
+            pr = render_reasoning(entry)
             continue
         if entry.get("role"):
             role = entry.get("role", "system").lower()
-            reasoning_html = pending_reasoning if role == "assistant" else None
+            reasoning_html = pr if role == "assistant" else None
             html_block = render_message(entry, reasoning_html)
-            items.append(f"<div class='timeline-item role-{html.escape(role)}'>{html_block}</div>")
+            items.append(
+                f"<div class='timeline-item role-{html.escape(role)}'>{html_block}</div>"
+            )
             if reasoning_html:
-                pending_reasoning = None
+                pr = None
         else:
-            if pending_reasoning:
-                items.append(f"<div class='timeline-item role-assistant'>{pending_reasoning}</div>")
-                pending_reasoning = None
+            if pr:
+                items.append(
+                    f"<div class='timeline-item role-assistant'>{pr}</div>"
+                )
+                pr = None
             if entry.get("type") == "function_call":
                 call_id = entry.get("call_id") or entry.get("id")
                 run_info = tool_run_lookup.get(str(call_id)) if tool_run_lookup else None
@@ -912,6 +1009,69 @@ def render_conversation(
                 items.append(
                     "<div class='timeline-item role-system'>" + render_misc(entry) + "</div>"
                 )
+    return items, pr
+
+
+def render_conversation(
+    conversation: List[Dict[str, Any]],
+    tool_run_lookup: Optional[Dict[str, Dict[str, Any]]] = None,
+    collapsed_spans: Optional[List[CollapsedSpan]] = None,
+) -> str:
+    items: List[str] = []
+    pending_reasoning: Optional[str] = None
+
+    N = len(conversation)
+    span_by_start: Dict[int, CollapsedSpan] = {}
+    if collapsed_spans:
+        for sp in collapsed_spans:
+            # Clamp to bounds just in case
+            s = max(0, min(N - 1, sp.start_index))
+            e = max(0, min(N - 1, sp.end_index))
+            if e >= s:
+                span_by_start[s] = CollapsedSpan(
+                    start_index=s,
+                    end_index=e,
+                    start_bot_idx=sp.start_bot_idx,
+                    end_bot_idx=sp.end_bot_idx,
+                    num_messages=e - s + 1,
+                    num_bot_messages=sp.num_bot_messages,
+                    avg_profile=sp.avg_profile,
+                    avg_similarity=sp.avg_similarity,
+                    m=sp.m,
+                    label=sp.label,
+                )
+
+    i = 0
+    while i < N:
+        if i in span_by_start:
+            sp = span_by_start[i]
+            inner_items, pending_reasoning = _render_conversation_range(
+                conversation, sp.start_index, sp.end_index, tool_run_lookup, pending_reasoning
+            )
+            # Build summary line
+            meta = (
+                f"<span class='collapsed-summary-meta'>"
+                f"{sp.num_messages} items · {sp.num_bot_messages} assistant msgs · "
+                f"m={sp.m} · avg sim {sp.avg_similarity:.2f}"
+                f"</span>"
+            )
+            label = html.escape(sp.label)
+            collapsed_html = (
+                "<details class='collapsed-span'>"
+                f"<summary>Collapsed: {label} {meta}</summary>"
+                f"<div class='collapsed-body'>{''.join(inner_items)}</div>"
+                "</details>"
+            )
+            items.append(collapsed_html)
+            i = sp.end_index + 1
+            continue
+
+        # Render a single item normally
+        single_items, pending_reasoning = _render_conversation_range(
+            conversation, i, i, tool_run_lookup, pending_reasoning
+        )
+        items.extend(single_items)
+        i += 1
 
     if pending_reasoning:
         items.append(f"<div class='timeline-item role-assistant'>{pending_reasoning}</div>")
@@ -1047,9 +1207,39 @@ def main() -> None:
     generated_at = datetime.now(timezone.utc).isoformat()
 
     tool_summary_chip, tools_summary_html = summarize_tools(metadata)
-    metadata_summary_html, metadata_html = render_metadata(metadata, tool_summary_chip)
+    # Detect collapsed spans unless disabled
+    collapsed_spans: List[CollapsedSpan] = []
+    if not args.no_collapse:
+        try:
+            collapsed_spans = detect_collapsed_spans(
+                conversation,
+                m_pct=max(0.01, min(0.99, float(args.collapse_m_pct))),
+                threshold_pct=max(0.0, min(1.0, float(args.collapse_threshold_pct))),
+                min_windows=max(1, int(args.collapse_min_windows)),
+                min_span_messages=max(1, int(args.collapse_min_messages)),
+                grow_sim=(float(args.collapse_grow_sim) if float(args.collapse_grow_sim) > 0 else None),
+                grow_max=(None if int(args.collapse_grow_max) == 0 else int(args.collapse_grow_max)),
+                backend=args.collapse_backend,
+                embedding_model=args.collapse_embedding_model,
+                embedding_batch_size=int(args.collapse_embedding_batch_size),
+            )
+        except Exception as e:
+            # Non-fatal: keep rendering even if detection fails
+            collapsed_spans = []
+            metadata["collapse_error"] = str(e)
+
+    collapsed_chip = (
+        f"<span class='meta-chip'>Collapsed spans: {len(collapsed_spans)}</span>"
+        if collapsed_spans is not None
+        else ""
+    )
+    extra_chip = ", ".join([c for c in (tool_summary_chip, collapsed_chip) if c])
+    # Render metadata summary + details
+    metadata_summary_html, metadata_html = render_metadata(metadata, extra_chip)
     tool_run_lookup = build_tool_run_index(tool_runs)
-    conversation_html = render_conversation(conversation, tool_run_lookup)
+    conversation_html = render_conversation(
+        conversation, tool_run_lookup, collapsed_spans
+    )
     output_path = determine_output_path(args)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     html_document = HTML_TEMPLATE.format(

@@ -561,20 +561,47 @@ def run_loop(config: RunnerConfig) -> RunState:
         if reasoning_payload:
             reasoning_kwargs["reasoning"] = reasoning_payload
         request_messages = _convert_messages_for_provider(input_messages, provider)
+        # Build kwargs, conditionally include temperature
+        base_kwargs: Dict[str, Any] = dict(
+            model=config.model,
+            input=request_messages,
+            previous_response_id=state.previous_response_id,
+            tools=available_tools or None,
+        )
+        if config.temperature is not None:
+            base_kwargs["temperature"] = config.temperature
         try:
             response = litellm.responses(
-                model=config.model,
-                input=request_messages,
-                previous_response_id=state.previous_response_id,
-                tools=available_tools or None,
-                temperature=config.temperature,
+                **base_kwargs,
                 **reasoning_kwargs,
             )
         except BadRequestError as exc:
             message_text = str(exc)
-            if "No tool output found for function call" not in message_text:
-                print(f"Error from model request: {message_text}", flush=True)
-                raise
+            # Auto-retry without temperature if model rejects it
+            if (
+                "Unsupported parameter" in message_text
+                and "temperature" in message_text
+                and "temperature" in base_kwargs
+            ):
+                print("Model rejected 'temperature'; retrying without it.", flush=True)
+                base_kwargs.pop("temperature", None)
+                try:
+                    response = litellm.responses(
+                        **base_kwargs,
+                        **reasoning_kwargs,
+                    )
+                except BadRequestError:
+                    # Fall through to original handling
+                    pass
+                else:
+                    # Also stop sending temperature for rest of this run
+                    config.temperature = None
+                    # proceed with response handling below
+                    pass
+            if 'response' not in locals():
+                if "No tool output found for function call" not in message_text:
+                    print(f"Error from model request: {message_text}", flush=True)
+                    raise
             print(
                 "Model aborted due to missing tool output: "
                 f"{message_text}",
@@ -1171,12 +1198,28 @@ def conduct_questionnaire(
     state.conversation.append(question_message)
     try:
         request_messages = _convert_messages_for_provider([question_message], provider)
-        response = litellm.responses(
+        kwargs: Dict[str, Any] = dict(
             model=config.model,
             input=request_messages,
             previous_response_id=state.previous_response_id,
-            temperature=config.temperature,
         )
+        if config.temperature is not None:
+            kwargs["temperature"] = config.temperature
+        try:
+            response = litellm.responses(**kwargs)
+        except BadRequestError as exc:
+            msg = str(exc)
+            if (
+                "Unsupported parameter" in msg
+                and "temperature" in msg
+                and "temperature" in kwargs
+            ):
+                print("Questionnaire: model rejected 'temperature'; retrying without it.", flush=True)
+                kwargs.pop("temperature", None)
+                response = litellm.responses(**kwargs)
+                config.temperature = None
+            else:
+                raise
     except Exception as exc:
         state.conversation.append(
             {
@@ -1236,6 +1279,53 @@ def write_log(
     if questionnaire:
         payload["questionnaire"] = questionnaire
     log_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    # Attempt to log per-turn time series to MLflow by default.
+    try:
+        # Lazy import to keep base runtime light if mlflow isn't wanted.
+        from analyze_log_mlflow import compute_series, log_series_to_mlflow
+        import os as _os
+        if _os.environ.get("BOREDOM_TS_DISABLE"):
+            return
+        _os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+        backend = _os.environ.get("BOREDOM_TS_BACKEND", "embedding")
+        embed_model = _os.environ.get("BOREDOM_TS_MODEL", "Snowflake/snowflake-arctic-embed-m")
+        data = payload
+        series, meta, spans = compute_series(
+            data,
+            role="assistant",
+            backend=backend,
+            embedding_model=embed_model,
+            embedding_batch_size=int(_os.environ.get("BOREDOM_TS_BATCH", "64")),
+        )
+        # Aggregate metrics
+        from analyze_log_mlflow import compute_conversation_metrics as _ccm
+        agg = _ccm(
+            data,
+            role="assistant",
+            backend=backend,
+            embedding_model=embed_model,
+            embedding_batch_size=int(_os.environ.get("BOREDOM_TS_BATCH", "64")),
+        )
+        # Experiment/run naming defaults; allow env override
+        experiment = _os.environ.get("MLFLOW_EXPERIMENT_NAME", "boredom-grid")
+        model_name = (metadata.get("model") or "model").replace("/", "-")
+        base_name = log_path.stem
+        run_name = f"{model_name}-{base_name}"
+        tracking = Path(_os.environ.get("MLFLOW_TRACKING_DIR", "mlruns")).resolve()
+        log_series_to_mlflow(
+            log_path,
+            series,
+            meta,
+            spans,
+            experiment=experiment,
+            run_name=run_name,
+            tracking_dir=tracking,
+            extra_metrics=agg,
+        )
+    except Exception as _e:
+        # Non-fatal: keep silent in normal flow, but you can uncomment for debugging.
+        # print(f"[timeseries] skipped: {_e}")
+        pass
 
 
 def main() -> None:

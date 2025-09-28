@@ -1,0 +1,98 @@
+experiment_name: boredom-grid
+run_group: quick-dev
+parallelism: 2
+repeats: 1
+
+# You can list models as strings or as objects with per-model overrides
+models:
+  - name: openai/gpt-5
+    repeats: 2
+    idle_options:
+      target_output_tokens: 80000
+      reasoning_effort: high
+  - name: openai/gpt-5
+    repeats: 2
+    idle_options:
+      target_output_tokens: 80000
+      reasoning_effort: low
+  - name: openai/gpt-5-mini
+    repeats: 2
+    idle_options:
+      target_output_tokens: 80000
+      reasoning_effort: low
+  - name: openai/gpt-5-mini
+    repeats: 2
+    idle_options:
+      target_output_tokens: 80000
+      reasoning_effort: high
+  - name: openai/gpt-5-nano
+    repeats: 2
+    idle_options:
+      target_output_tokens: 80000
+      reasoning_effort: low
+  - name: openai/gpt-5-nano
+    repeats: 2
+    idle_options:
+      target_output_tokens: 80000
+      reasoning_effort: high
+  - name: together_ai/deepseek-ai/DeepSeek-V3
+    repeats: 1
+    idle_options:
+      target_output_tokens: 10000
+  - name: deepseek-ai/DeepSeek-V3.1
+    repeats: 1
+    idle_options:
+      target_output_tokens: 10000
+  - name: deepseek-ai/DeepSeek-R1-0528
+    repeats: 1
+    idle_options:
+      target_output_tokens: 30000
+  - name: deepseek-ai/DeepSeek-R1
+    repeats: 1
+    idle_options:
+      target_output_tokens: 30000
+  - name: Qwen/Qwen3-Next-80B-A3B-Thinking
+    repeats: 1
+    idle_options:
+      target_output_tokens: 50000
+  - name: Qwen/Qwen3-Next-80B-A3B-Instruct
+    repeats: 1
+    idle_options:
+      target_output_tokens: 50000
+  - name: openai/gpt-oss-20b
+    repeats: 2
+    idle_options:
+      target_output_tokens: 50000
+
+# Options forwarded to idle_llm_loop.py
+idle_options:
+  target_output_tokens: 6000
+  shift_hours: 1.0
+  max_iterations: 40
+  # temperature: 0.3
+  enable_web: true
+  enable_render_svg: true
+  enable_time_travel: false
+  log_dir: logs
+  artifact_dir: artifacts
+  reasoning_summary: auto
+  # no_reasoning_summary: true
+  # reasoning_effort: medium
+
+# Rendering + collapse-detection options
+render_options:
+  html_dir: html
+  collapse_backend: embedding               # or tfidf
+  collapse_m_pct: 0.30
+  collapse_threshold_pct: 0.15
+  collapse_min_windows: 3
+  collapse_min_messages: 5
+  collapse_grow_sim: 0.85
+  collapse_grow_max: 0
+  collapse_embedding_model: Snowflake/snowflake-arctic-embed-m
+  collapse_embedding_batch_size: 64
+  mlflow_dir: mlruns
+
+# Controls
+open_html: false
+run_name_template: "{experiment}-{model}-rep{rep}-{ts}"
