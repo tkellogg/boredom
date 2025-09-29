@@ -20,7 +20,7 @@ import litellm
 import requests
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
-from litellm.exceptions import BadRequestError, InternalServerError
+from litellm.exceptions import BadRequestError, InternalServerError, UnsupportedParamsError
 
 DEFAULT_PROMPT = textwrap.dedent(
     """
@@ -71,6 +71,7 @@ class RunnerConfig:
     enable_web: bool
     enable_render_svg: bool
     enable_time_travel: bool
+    disable_tools: bool = False
     log_path: Path
     artifact_dir: Path
     max_iterations: Optional[int] = None
@@ -109,6 +110,8 @@ class ToolRegistry:
         self.config = config
 
     def definitions(self) -> List[Dict[str, Any]]:
+        if self.config.disable_tools:
+            return []
         base_specs: List[Dict[str, Any]] = []
         if self.config.enable_web:
             base_specs.extend(
@@ -376,6 +379,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--enable-web", action="store_true")
     parser.add_argument("--enable-render-svg", action="store_true")
     parser.add_argument("--enable-time-travel", action="store_true")
+    parser.add_argument("--disable-tools", action="store_true", help="Disable all tools regardless of per-tool flags.")
     parser.add_argument(
         "--reasoning-summary",
         choices=["auto", "concise", "detailed"],
@@ -521,6 +525,7 @@ def run_loop(config: RunnerConfig) -> RunState:
     tools = ToolRegistry(config)
     input_messages: List[Dict[str, Any]] = []
     available_tools = tools.definitions()
+    tools_allowed = True  # flip to False if provider rejects the 'tools' parameter
     tool_names = [spec.get("name") for spec in available_tools if isinstance(spec, dict) and spec.get("name")]
     log_meta = {
         "model": config.model,
@@ -535,6 +540,7 @@ def run_loop(config: RunnerConfig) -> RunState:
         "enable_web": config.enable_web,
         "enable_render_svg": config.enable_render_svg,
         "enable_time_travel": config.enable_time_travel,
+        "tools_disabled_explicit": bool(config.disable_tools),
     }
     if tool_names:
         log_meta["tools"] = tool_names
@@ -565,11 +571,36 @@ def run_loop(config: RunnerConfig) -> RunState:
             model=config.model,
             input=request_messages,
             previous_response_id=state.previous_response_id,
-            tools=available_tools or None,
         )
+        if tools_allowed and available_tools:
+            base_kwargs["tools"] = available_tools
         if config.temperature is not None:
             base_kwargs["temperature"] = config.temperature
         try:
+            response = litellm.responses(
+                **base_kwargs,
+                **reasoning_kwargs,
+            )
+        except UnsupportedParamsError as exc:
+            # Provider/model does not support the 'tools' parameter. Disable tools and retry once.
+            if "tools" in base_kwargs:
+                base_kwargs.pop("tools", None)
+            tools_allowed = False
+            log_meta["tools_disabled_due_to_provider"] = True
+            log_meta["tools_error"] = str(exc)
+            state.conversation.append(
+                {
+                    "role": "system",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": (
+                                "Tools disabled: provider reported tools unsupported for this model."
+                            ),
+                        }
+                    ],
+                }
+            )
             response = litellm.responses(
                 **base_kwargs,
                 **reasoning_kwargs,
@@ -1361,6 +1392,7 @@ def main() -> None:
         enable_web=args.enable_web,
         enable_render_svg=args.enable_render_svg,
         enable_time_travel=args.enable_time_travel,
+        disable_tools=bool(getattr(args, "disable_tools", False)),
         log_path=log_path,
         artifact_dir=artifact_dir,
         max_iterations=args.max_iterations,

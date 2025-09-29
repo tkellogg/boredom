@@ -5,19 +5,11 @@ repeats: 1
 
 # You can list models as strings or as objects with per-model overrides
 models:
-  - name: anthropic/sonnet-4-0
-    repeats: 4
-    idle_options:
-      target_output_tokens: 40000
-  - name: anthropic/sonnet-3-7
+  - name: anthropic/claude-opus-4-0
     repeats: 2
     idle_options:
       target_output_tokens: 40000
-  - name: anthropic/opus-4-0
-    repeats: 2
-    idle_options:
-      target_output_tokens: 40000
-  - name: anthropic/haiku-3-5
+  - name: anthropic/claude-opus-4-1
     repeats: 2
     idle_options:
       target_output_tokens: 40000
@@ -25,20 +17,8 @@ models:
     repeats: 2
     idle_options:
       target_output_tokens: 40000
-  - name: together_ai/deepseek-ai/DeepSeek-V3
-    repeats: 1
-    idle_options:
-      target_output_tokens: 10000
-  - name: together_ai/deepseek-ai/DeepSeek-V3.1
-    repeats: 1
-    idle_options:
-      target_output_tokens: 10000
   - name: together_ai/deepseek-ai/DeepSeek-R1-0528
-    repeats: 1
-    idle_options:
-      target_output_tokens: 30000
-  - name: together_ai/deepseek-ai/DeepSeek-R1
-    repeats: 1
+    repeats: 2
     idle_options:
       target_output_tokens: 30000
   - name: together_ai/Qwen/Qwen3-Next-80B-A3B-Thinking
@@ -49,7 +29,7 @@ models:
     repeats: 1
     idle_options:
       target_output_tokens: 50000
-  - name: together_ai/openai/gpt-oss-20b
+  - name: together_ai/openai/gpt-oss-120b
     repeats: 2
     idle_options:
       target_output_tokens: 50000
@@ -59,6 +39,7 @@ idle_options:
   target_output_tokens: 6000
   shift_hours: 1.0
   max_iterations: 40
+  disable_tools: false
   # temperature: 0.3
   enable_web: true
   enable_render_svg: true
