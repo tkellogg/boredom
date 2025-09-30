@@ -8,6 +8,7 @@ import os
 import re
 import textwrap
 import time
+import math
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -17,6 +18,11 @@ from typing import Any, Deque, Dict, Iterable, List, Optional, Set
 from tqdm import tqdm
 
 import litellm
+# Drop unsupported request params automatically (e.g., 'tools' on providers that don't support it)
+try:
+    setattr(litellm, "drop_params", True)
+except Exception:
+    pass
 import requests
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
@@ -71,9 +77,11 @@ class RunnerConfig:
     enable_web: bool
     enable_render_svg: bool
     enable_time_travel: bool
-    disable_tools: bool = False
+    enable_broken_time_travel: bool
     log_path: Path
     artifact_dir: Path
+    # Optional / defaulted flags must come after non-default fields above
+    disable_tools: bool = False
     max_iterations: Optional[int] = None
     temperature: Optional[float] = None
     reasoning_summary: Optional[str] = None
@@ -108,6 +116,8 @@ def _provider_prefix_from_model(model: str) -> str:
 class ToolRegistry:
     def __init__(self, config: RunnerConfig) -> None:
         self.config = config
+        if self.config.enable_time_travel and self.config.enable_broken_time_travel:
+            raise ValueError("Cannot enable both regular and broken time travel modes.")
 
     def definitions(self) -> List[Dict[str, Any]]:
         if self.config.disable_tools:
@@ -164,7 +174,7 @@ class ToolRegistry:
                     },
                 }
             )
-        if self.config.enable_time_travel:
+        if self.config.enable_time_travel or self.config.enable_broken_time_travel:
             base_specs.append(
                 {
                     "name": "timeTravel",
@@ -208,7 +218,9 @@ class ToolRegistry:
             return self._web_fetch(arguments)
         if canonical == "render_svg" and self.config.enable_render_svg:
             return self._render_svg(arguments)
-        if canonical == "time_travel" and self.config.enable_time_travel:
+        if canonical == "time_travel" and (
+            self.config.enable_time_travel or self.config.enable_broken_time_travel
+        ):
             return self._time_travel(arguments, state)
         raise ToolExecutionError(f"Tool '{name}' is disabled or unknown.")
 
@@ -327,6 +339,15 @@ class ToolRegistry:
         }
 
     def _time_travel(self, arguments: Dict[str, Any], state: RunState) -> Dict[str, Any]:
+        if self.config.enable_time_travel and self.config.enable_broken_time_travel:
+            raise ToolExecutionError(
+                "Misconfigured time travel: both standard and broken modes enabled."
+            )
+        if self.config.enable_broken_time_travel:
+            return self._time_travel_broken(arguments, state)
+        return self._time_travel_standard(arguments, state)
+
+    def _time_travel_standard(self, arguments: Dict[str, Any], state: RunState) -> Dict[str, Any]:
         raw_seconds = arguments.get("seconds")
         if raw_seconds is None:
             raise ToolExecutionError("Missing 'seconds' argument for time_travel.")
@@ -335,6 +356,51 @@ class ToolRegistry:
         except (TypeError, ValueError):
             raise ToolExecutionError("'seconds' must be an integer.")
         state.time_travel_offset_seconds += seconds
+        progress = 0.0
+        if self.config.target_output_tokens > 0:
+            progress = min(state.total_output_tokens / self.config.target_output_tokens, 1.0)
+        remaining_label = format_time_remaining(
+            progress,
+            self.config.shift_hours,
+            state.time_travel_offset_seconds,
+        )
+        direction = "forward" if seconds > 0 else "backward" if seconds < 0 else "nowhere"
+        message = (
+            f"Time traveled {direction} by {abs(seconds)} seconds."
+            if seconds
+            else "Time unchanged."
+        )
+        summary = f"New time remaining: {remaining_label}."
+        return {
+            "llm_content": [
+                {
+                    "type": "output_text",
+                    "text": f"{message} {summary}",
+                }
+            ],
+            "log": {
+                "tool": "time_travel",
+                "arguments": {"seconds": seconds},
+                "time_travel_offset_seconds": state.time_travel_offset_seconds,
+                "result_time_remaining": remaining_label,
+            },
+        }
+
+    def _time_travel_broken(self, arguments: Dict[str, Any], state: RunState) -> Dict[str, Any]:
+        raw_seconds = arguments.get("seconds")
+        if raw_seconds is None:
+            raise ToolExecutionError("Missing 'seconds' argument for time_travel.")
+        try:
+            seconds = int(raw_seconds)
+        except (TypeError, ValueError):
+            raise ToolExecutionError("'seconds' must be an integer.")
+        abs_seconds = abs(seconds)
+        applied_seconds = 0
+        if abs_seconds:
+            shift_total = _shift_total_seconds(self.config)
+            applied_magnitude = math.gcd(abs_seconds, shift_total)
+            applied_seconds = applied_magnitude if seconds >= 0 else -applied_magnitude
+        state.time_travel_offset_seconds += applied_seconds
         progress = 0.0
         if self.config.target_output_tokens > 0:
             progress = min(state.total_output_tokens / self.config.target_output_tokens, 1.0)
@@ -379,6 +445,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--enable-web", action="store_true")
     parser.add_argument("--enable-render-svg", action="store_true")
     parser.add_argument("--enable-time-travel", action="store_true")
+    parser.add_argument("--enable-broken-time-travel", action="store_true")
     parser.add_argument("--disable-tools", action="store_true", help="Disable all tools regardless of per-tool flags.")
     parser.add_argument(
         "--reasoning-summary",
@@ -540,6 +607,7 @@ def run_loop(config: RunnerConfig) -> RunState:
         "enable_web": config.enable_web,
         "enable_render_svg": config.enable_render_svg,
         "enable_time_travel": config.enable_time_travel,
+        "enable_broken_time_travel": config.enable_broken_time_travel,
         "tools_disabled_explicit": bool(config.disable_tools),
     }
     if tool_names:
@@ -1363,6 +1431,8 @@ def write_log(
 def main() -> None:
     load_dotenv()
     args = parse_args()
+    if args.enable_time_travel and getattr(args, "enable_broken_time_travel", False):
+        raise SystemExit("Cannot enable both --enable-time-travel and --enable-broken-time-travel.")
     prompt = load_prompt(getattr(args, "prompt_file", None))
     log_dir: Path = args.log_dir
     artifact_dir: Path = args.artifact_dir
@@ -1384,6 +1454,11 @@ def main() -> None:
                 print(f"Reasoning effort hint ignored for {args.model}: model not flagged as supporting reasoning.")
             reasoning_summary = None
             reasoning_effort = None
+    # Allow environment variable to force-disable tools across runs
+    import os as _os
+    if _os.environ.get("BOREDOM_DISABLE_TOOLS", "").strip().lower() in {"1", "true", "yes", "on"}:
+        args.disable_tools = True
+
     config = RunnerConfig(
         model=args.model,
         prompt=prompt,
@@ -1392,6 +1467,7 @@ def main() -> None:
         enable_web=args.enable_web,
         enable_render_svg=args.enable_render_svg,
         enable_time_travel=args.enable_time_travel,
+        enable_broken_time_travel=args.enable_broken_time_travel,
         disable_tools=bool(getattr(args, "disable_tools", False)),
         log_path=log_path,
         artifact_dir=artifact_dir,

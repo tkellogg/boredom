@@ -5,45 +5,22 @@ repeats: 1
 
 # You can list models as strings or as objects with per-model overrides
 models:
-  - name: anthropic/claude-opus-4-0
-    repeats: 2
-    idle_options:
-      target_output_tokens: 40000
-  - name: anthropic/claude-opus-4-1
-    repeats: 2
-    idle_options:
-      target_output_tokens: 40000
-  - name: openai/gpt-4o
-    repeats: 2
-    idle_options:
-      target_output_tokens: 40000
-  - name: together_ai/deepseek-ai/DeepSeek-R1-0528
-    repeats: 2
+  - name: anthropic/claude-sonnet-4-5
+    repeats: 3
     idle_options:
       target_output_tokens: 30000
-  - name: together_ai/Qwen/Qwen3-Next-80B-A3B-Thinking
-    repeats: 1
-    idle_options:
-      target_output_tokens: 50000
-  - name: together_ai/Qwen/Qwen3-Next-80B-A3B-Instruct
-    repeats: 1
-    idle_options:
-      target_output_tokens: 50000
-  - name: together_ai/openai/gpt-oss-120b
-    repeats: 2
-    idle_options:
-      target_output_tokens: 50000
 
 # Options forwarded to idle_llm_loop.py
 idle_options:
   target_output_tokens: 6000
-  shift_hours: 1.0
+  shift_hours: 10.0
   max_iterations: 40
   disable_tools: false
   # temperature: 0.3
-  enable_web: true
-  enable_render_svg: true
+  enable_web: false
+  enable_render_svg: false
   enable_time_travel: false
+  enable_broken_time_travel: true
   log_dir: logs
   artifact_dir: artifacts
   reasoning_summary: auto
@@ -65,5 +42,5 @@ render_options:
   mlflow_dir: mlruns
 
 # Controls
-open_html: false
+open_html: true
 run_name_template: "{experiment}-{model}-rep{rep}-{ts}"

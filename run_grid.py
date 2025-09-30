@@ -120,6 +120,7 @@ def build_idle_cmd(spec: RunSpec) -> List[str]:
         ("enable-web", "enable_web"),
         ("enable-render-svg", "enable_render_svg"),
         ("enable-time-travel", "enable_time_travel"),
+        ("enable-broken-time-travel", "enable_broken_time_travel"),
         ("disable-tools", "disable_tools"),
     ]:
         if key in opts:
