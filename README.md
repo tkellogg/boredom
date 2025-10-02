@@ -116,7 +116,8 @@ far better, although they are quite slow during the render script.
 ## Useful Flags & Env Vars
 - idle_llm_loop.py
   - `--disable-tools` (or `BOREDOM_DISABLE_TOOLS=true`): kill switch when providers reject tools
-  - `--enable-time-travel`, `--enable-render-svg`, `--enable-web`
+- `--enable-time-travel`, `--enable-render-svg`, `--enable-web`
+  - `--enable-broken-time-travel` uses an intentionally odd rule: it applies only the remainder of your request modulo the total shift seconds (so asking for exactly the total shift has no effect).
   - Auto‑retry: if `temperature` is unsupported, the runner retries without it
 - render_conversation_html.py
   - `--no-collapse` to render raw
@@ -145,3 +146,29 @@ far better, although they are quite slow during the render script.
 - `grid.yaml` — example grid configuration
 
 Enjoy! If a provider/model does something odd, it’s almost always a parameter mismatch. Start with `--disable-tools` and a small run, then re‑enable features model‑by‑model.
+
+## Plugins (Experimental)
+You can extend the idle loop with small, hot‑swappable plugins. Each plugin is a module in `plugins/` exposing a `Plugin` class. Configure via CLI or `grid.yaml`.
+
+- CLI:
+  - `--plugin-dir plugins`
+  - `--plugins '[{"module":"default"}, {"module":"tool_cooldown", "params": {"tool_name": "time_travel", "cooldown_iters": 6}}]'`
+- YAML (`idle_options`):
+  - `plugin_dir: plugins`
+  - `plugins:`
+    - `{module: default}`
+    - `{module: tool_cooldown, params: {tool_name: time_travel, cooldown_iters: 6}}`
+
+Built‑in plugins:
+- `default` — no‑op baseline.
+- `tool_cooldown` — detects repetitive loops (TF‑IDF by default) and temporarily removes a tool (e.g., `time_travel`) for a cool‑off period. Emits system notes when toggling.
+  - Params: `tool_name`, `sim_threshold` (default 0.8), `min_messages`, `cooldown_iters`, `backend` (tfidf|embedding), `require_recent` (default false), `recent_window`, `recent_min_calls`.
+  - Also posts invisible notes to the transcript (role `note`) when cooldown starts/updates/ends.
+
+Hook points available to plugins:
+- transform system/user messages, transform/modify tool specs each iteration
+- observe responses and tool results, and alter request kwargs before each call
+
+Posting plugin notes (invisible to AI):
+- From any plugin, call `ctx.emit_note("text", tag="optional_tag", data={...})`.
+- Notes are added to the conversation log with role `note` and rendered in the HTML timeline, but are not sent back to the model.

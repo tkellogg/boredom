@@ -121,10 +121,14 @@ def build_idle_cmd(spec: RunSpec) -> List[str]:
         ("enable-render-svg", "enable_render_svg"),
         ("enable-time-travel", "enable_time_travel"),
         ("enable-broken-time-travel", "enable_broken_time_travel"),
+        ("carry-forward-last-answer", "carry_forward_last_answer"),
         ("disable-tools", "disable_tools"),
     ]:
         if key in opts:
             cmd.extend(_bool_flag(flag, bool(opts[key])))
+    # Optional path for carry-forward source
+    if opts.get("carry_forward_source"):
+        cmd.extend(["--carry-forward-source", str(opts["carry_forward_source"])])
     # reasoning options
     if "reasoning_summary" in opts:
         cmd.extend(["--reasoning-summary", str(opts["reasoning_summary"])])
@@ -132,6 +136,12 @@ def build_idle_cmd(spec: RunSpec) -> List[str]:
         cmd.append("--no-reasoning-summary")
     if "reasoning_effort" in opts and opts["reasoning_effort"]:
         cmd.extend(["--reasoning-effort", str(opts["reasoning_effort"])])
+    # plugins
+    if opts.get("plugin_dir"):
+        cmd.extend(["--plugin-dir", str(opts["plugin_dir"])])
+    if opts.get("plugins"):
+        import json as _json
+        cmd.extend(["--plugins", _json.dumps(opts["plugins"])])
     return cmd
 
 
@@ -326,6 +336,11 @@ def main() -> None:
     cfg = load_yaml_config(args.config)
     specs = expand_runs(cfg)
     parallelism = int(cfg.get("parallelism", 1))
+    # If any run requests carry-forward behavior, enforce sequential runs
+    if any(bool(s.options.get("carry_forward_last_answer")) for s in specs):
+        if parallelism != 1:
+            print("carry_forward_last_answer enabled → forcing sequential runs (parallelism=1)")
+        parallelism = 1
 
     print(f"Scheduling {len(specs)} runs (parallelism={parallelism})")
     results: List[Dict[str, Any]] = []

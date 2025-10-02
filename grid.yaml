@@ -5,10 +5,18 @@ repeats: 1
 
 # You can list models as strings or as objects with per-model overrides
 models:
-  - name: anthropic/claude-sonnet-4-5
-    repeats: 3
+  - name: openai/gpt-5
+    repeats: 1
     idle_options:
-      target_output_tokens: 30000
+      target_output_tokens: 51000
+  - name: openai/gpt-5-mini
+    repeats: 1
+    idle_options:
+      target_output_tokens: 51000
+  - name: openai/gpt-5-nano
+    repeats: 1
+    idle_options:
+      target_output_tokens: 51000
 
 # Options forwarded to idle_llm_loop.py
 idle_options:
@@ -21,11 +29,23 @@ idle_options:
   enable_render_svg: false
   enable_time_travel: false
   enable_broken_time_travel: true
+  carry_forward_last_answer: false
   log_dir: logs
   artifact_dir: artifacts
   reasoning_summary: auto
   # no_reasoning_summary: true
   # reasoning_effort: medium
+  # Plugin system (optional)
+  # plugin_dir: plugins   # where plugin modules live
+  plugins:
+    # - module: default
+    - module: tool_cooldown
+      params:
+        tool_name: time_travel
+        sim_threshold: 0.9
+        min_messages: 5
+        cooldown_iters: 6
+        backend: embedding
 
 # Rendering + collapse-detection options
 render_options:

@@ -204,6 +204,7 @@ main {{
 .timeline-item.role-assistant::before {{ background: #2563eb; }}
 .timeline-item.role-tool::before {{ background: var(--tool); }}
 .timeline-item.role-user::before {{ background: #94a3b8; }}
+.timeline-item.role-note::before {{ background: var(--system); }}
 
 .message {{
   border-radius: 20px;
@@ -220,6 +221,7 @@ main {{
 .message.role-assistant {{ border-left: 4px solid #2563eb; }}
 .message.role-tool {{ border-left: 4px solid var(--tool); }}
 .message.role-system {{ border-left: 4px solid var(--system); }}
+.message.role-note {{ border-left: 4px solid var(--system); opacity: 0.92; }}
 
 .message-header {{
   display: flex;

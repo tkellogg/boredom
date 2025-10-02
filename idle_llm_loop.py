@@ -27,6 +27,7 @@ import requests
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 from litellm.exceptions import BadRequestError, InternalServerError, UnsupportedParamsError
+from plugins.plugin_base import PluginManager, PluginSpec
 
 DEFAULT_PROMPT = textwrap.dedent(
     """
@@ -78,6 +79,8 @@ class RunnerConfig:
     enable_render_svg: bool
     enable_time_travel: bool
     enable_broken_time_travel: bool
+    carry_forward_last_answer: bool
+    carry_forward_source: Optional[Path]
     log_path: Path
     artifact_dir: Path
     # Optional / defaulted flags must come after non-default fields above
@@ -397,8 +400,10 @@ class ToolRegistry:
         abs_seconds = abs(seconds)
         applied_seconds = 0
         if abs_seconds:
+            # Intentionally broken: only apply the remainder w.r.t. total shift seconds.
+            # Requests that are exact multiples of the total shift have no effect.
             shift_total = _shift_total_seconds(self.config)
-            applied_magnitude = math.gcd(abs_seconds, shift_total)
+            applied_magnitude = abs_seconds % max(1, shift_total)
             applied_seconds = applied_magnitude if seconds >= 0 else -applied_magnitude
         state.time_travel_offset_seconds += applied_seconds
         progress = 0.0
@@ -415,7 +420,7 @@ class ToolRegistry:
             if seconds
             else "Time unchanged."
         )
-        summary = f"New time remaining: {remaining_label}."
+        summary = f"(Broken mode: applied {applied_seconds:+d} sec) New time remaining: {remaining_label}."
         return {
             "llm_content": [
                 {
@@ -428,6 +433,7 @@ class ToolRegistry:
                 "arguments": {"seconds": seconds},
                 "time_travel_offset_seconds": state.time_travel_offset_seconds,
                 "result_time_remaining": remaining_label,
+                "broken_applied_seconds": applied_seconds,
             },
         }
 
@@ -447,6 +453,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--enable-time-travel", action="store_true")
     parser.add_argument("--enable-broken-time-travel", action="store_true")
     parser.add_argument("--disable-tools", action="store_true", help="Disable all tools regardless of per-tool flags.")
+    # Carry-forward prompt mode
+    parser.add_argument(
+        "--carry-forward-last-answer",
+        action="store_true",
+        help=(
+            "Append the previous session's final questionnaire answer to the system prompt."
+        ),
+    )
+    parser.add_argument(
+        "--carry-forward-source",
+        type=Path,
+        help=(
+            "Optional path to a prior run JSON to source the carried-forward answer."
+        ),
+    )
     parser.add_argument(
         "--reasoning-summary",
         choices=["auto", "concise", "detailed"],
@@ -463,6 +484,17 @@ def parse_args() -> argparse.Namespace:
         choices=["minimal", "low", "medium", "high"],
         help="Optional reasoning effort hint for supported models.",
     )
+    # Plugin system
+    parser.add_argument("--plugin-dir", type=Path, default=Path("plugins"), help="Directory with plugin modules.")
+    parser.add_argument(
+        "--plugins",
+        type=str,
+        help=(
+            "JSON list of plugins, e.g. \n"
+            "  '[{""module"": ""default""}]' or\n"
+            "  '[{""module"": ""tool_cooldown"", ""params"": {""cooldown_iters"": 6}}]'"
+        ),
+    )
     return parser.parse_args()
 
 
@@ -470,6 +502,50 @@ def load_prompt(prompt_file: Optional[Path]) -> str:
     if prompt_file:
         return prompt_file.read_text(encoding="utf-8").strip()
     return DEFAULT_PROMPT
+
+
+def _find_latest_log_for_model(log_dir: Path, model: str, exclude: Optional[Path] = None) -> Optional[Path]:
+    try:
+        candidates = sorted(log_dir.glob("run_*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+    except Exception:
+        return None
+    for p in candidates:
+        if exclude is not None and p.resolve() == exclude.resolve():
+            continue
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+            meta = data.get("metadata") or {}
+            if (meta.get("model") or "").lower() == (model or "").lower():
+                return p
+        except Exception:
+            continue
+    return None
+
+
+def _extract_last_answer_text(raw: str) -> str:
+    """Try to extract the answer to question 5 from a plain-prose block.
+
+    Heuristics:
+    - Prefer a line starting with '5)', '5.' or '5 -'.
+    - Else, find the question stem and take from there to the end.
+    - Else, fall back to the whole text.
+    """
+    text = (raw or "").strip()
+    if not text:
+        return ""
+    lines = text.splitlines()
+    # Look for numbered lead for Q5
+    for i, line in enumerate(lines):
+        s = line.strip()
+        if re.match(r"^5\s*[\)\.-]", s):
+            tail = "\n".join([s] + lines[i + 1 :]).strip()
+            return tail
+    # Look for the question stem
+    qstem = "would you do this exercise again"
+    idx = text.lower().find(qstem)
+    if idx != -1:
+        return text[idx:].strip()
+    return text
 
 
 def format_time_remaining(
@@ -586,12 +662,19 @@ def ensure_parent(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
 
 
-def run_loop(config: RunnerConfig) -> RunState:
+def run_loop(config: RunnerConfig, plugin_manager: Optional[PluginManager] = None) -> RunState:
     state = RunState()
     system_message = build_system_message(config.prompt)
     tools = ToolRegistry(config)
+    # Attach plugins if provided
+    if plugin_manager is not None:
+        def _append_message(m: Dict[str, Any]) -> None:
+            state.conversation.append(m)
+        plugin_manager.attach(config, state, tools, _append_message)
+        system_message = plugin_manager.transform_system_message(system_message)
     input_messages: List[Dict[str, Any]] = []
-    available_tools = tools.definitions()
+    base_tools = tools.definitions()
+    available_tools = plugin_manager.transform_tools(base_tools) if plugin_manager else base_tools
     tools_allowed = True  # flip to False if provider rejects the 'tools' parameter
     tool_names = [spec.get("name") for spec in available_tools if isinstance(spec, dict) and spec.get("name")]
     log_meta = {
@@ -608,10 +691,16 @@ def run_loop(config: RunnerConfig) -> RunState:
         "enable_render_svg": config.enable_render_svg,
         "enable_time_travel": config.enable_time_travel,
         "enable_broken_time_travel": config.enable_broken_time_travel,
+        "carry_forward_last_answer": bool(getattr(config, "carry_forward_last_answer", False)),
         "tools_disabled_explicit": bool(config.disable_tools),
     }
     if tool_names:
         log_meta["tools"] = tool_names
+    if plugin_manager is not None:
+        try:
+            log_meta["plugins"] = [getattr(p, "name", type(p).__name__) for p in plugin_manager.plugins]
+        except Exception:
+            log_meta["plugins"] = [type(p).__name__ for p in plugin_manager.plugins]
     pbar = tqdm(total=config.target_output_tokens, unit="tok", desc="output", leave=False)
     provider = _provider_prefix_from_model(config.model)
     while _effective_tokens(state, config) < config.target_output_tokens:
@@ -623,6 +712,8 @@ def run_loop(config: RunnerConfig) -> RunState:
             config.shift_hours,
             0,
         )
+        if plugin_manager is not None:
+            user_message = plugin_manager.transform_user_message(user_message)
         if state.iteration == 0:
             input_messages = [system_message, user_message]
             state.conversation.append(system_message)
@@ -640,10 +731,15 @@ def run_loop(config: RunnerConfig) -> RunState:
             input=request_messages,
             previous_response_id=state.previous_response_id,
         )
+        # Allow plugins to adjust tools per iteration
+        if plugin_manager is not None:
+            available_tools = plugin_manager.transform_tools(base_tools)
         if tools_allowed and available_tools:
             base_kwargs["tools"] = available_tools
         if config.temperature is not None:
             base_kwargs["temperature"] = config.temperature
+        if plugin_manager is not None:
+            base_kwargs = plugin_manager.before_request(base_kwargs)
         try:
             response = litellm.responses(
                 **base_kwargs,
@@ -727,12 +823,14 @@ def run_loop(config: RunnerConfig) -> RunState:
         prev_effective = _effective_tokens(state, config)
         prev_tokens = state.total_output_tokens
         update_token_totals(state, response_dict)
+        if plugin_manager is not None:
+            plugin_manager.after_response(response_dict)
         new_effective = _effective_tokens(state, config)
         # Drive the bar by effective progress (time-aligned), but never regress.
         pbar.update(max(new_effective - prev_effective, 0))
         state.iteration += 1
         state.previous_response_id = response_dict.get("id") or state.previous_response_id
-        state = handle_tool_calls(config, tools, state, response_dict, pbar)
+        state = handle_tool_calls(config, tools, state, response_dict, pbar, plugin_manager)
         # Early stop if time has elapsed (after tool effects) or effective target reached.
         if _remaining_seconds(state, config) <= 0 or _effective_tokens(state, config) >= config.target_output_tokens:
             # Append a final tick so the last visible time is consistent with completion
@@ -741,6 +839,8 @@ def run_loop(config: RunnerConfig) -> RunState:
                 build_user_message(final_progress, config.shift_hours, 0)
             )
             break
+        if plugin_manager is not None:
+            plugin_manager.on_iteration_end()
         time.sleep(0.5)
     questionnaire_data = conduct_questionnaire(config, state)
     ended_at = datetime.now(timezone.utc).isoformat()
@@ -785,6 +885,7 @@ def handle_tool_calls(
     state: RunState,
     response_dict: Dict[str, Any],
     pbar: Optional[tqdm] = None,
+    plugin_manager: Optional[PluginManager] = None,
 ) -> RunState:
     pending: Deque[Dict[str, Any]] = deque([response_dict])
     provider = _provider_prefix_from_model(config.model)
@@ -793,6 +894,18 @@ def handle_tool_calls(
         current_id = current_response.get("id") or response_dict.get("id") or state.previous_response_id
         if not current_id:
             continue
+        # Determine which tools are allowed right now (after any plugin transforms)
+        allowed_specs = tools.definitions()
+        if plugin_manager is not None:
+            try:
+                allowed_specs = plugin_manager.transform_tools(allowed_specs)
+            except Exception:
+                pass
+        allowed_names = set()
+        for spec in allowed_specs or []:
+            if isinstance(spec, dict) and spec.get("name"):
+                # Normalize to canonical internal
+                allowed_names.add(ToolRegistry._canonical_tool_name(spec.get("name")))
         tool_messages: List[Dict[str, Any]] = []
         tool_call_ids: List[str] = []
         seen_call_ids: Set[str] = set()
@@ -832,39 +945,63 @@ def handle_tool_calls(
                     arguments = raw_args
                 else:
                     arguments = {}
-                try:
-                    result = tools.execute(name, arguments, state)
-                    llm_content = result.get("llm_content") or []
-                    log_entry = result.get("log") or {}
-                    log_entry.setdefault("tool_call_id", call_id)
-                    tool_payload = build_tool_result_message(
-                        provider,
-                        call_id,
-                        llm_content,
-                        log_entry,
-                    )
-                except Exception as exc:
+                canonical = ToolRegistry._canonical_tool_name(name)
+                if canonical not in allowed_names:
+                    # Respond with a tool_result indicating the tool is disabled so the model can continue.
+                    msg_text = f"Tool '{name}' is disabled for now."
                     error_payload = {
                         "llm_content": [
-                            {
-                                "type": "output_text",
-                                "text": f"Tool '{name}' failed: {exc}",
-                            }
+                            {"type": "output_text", "text": msg_text}
                         ],
                         "log": {
                             "tool": name,
                             "arguments": arguments,
-                            "error": str(exc),
+                            "disabled": True,
+                            "reason": "disabled_by_plugin",
                         },
                     }
-                    error_log = error_payload["log"]
-                    error_log["tool_call_id"] = call_id
-                    tool_payload = build_tool_result_message(
-                        provider, call_id, error_payload["llm_content"], error_log
-                    )
+                    error_payload["log"]["tool_call_id"] = call_id
+                    tool_payload = build_tool_result_message(provider, call_id, error_payload["llm_content"], error_payload["log"])
+                else:
+                    try:
+                        result = tools.execute(name, arguments, state)
+                        llm_content = result.get("llm_content") or []
+                        log_entry = result.get("log") or {}
+                        log_entry.setdefault("tool_call_id", call_id)
+                        tool_payload = build_tool_result_message(
+                            provider,
+                            call_id,
+                            llm_content,
+                            log_entry,
+                        )
+                    except Exception as exc:
+                        error_payload = {
+                            "llm_content": [
+                                {
+                                    "type": "output_text",
+                                    "text": f"Tool '{name}' failed: {exc}",
+                                }
+                            ],
+                            "log": {
+                                "tool": name,
+                                "arguments": arguments,
+                                "error": str(exc),
+                            },
+                        }
+                        error_log = error_payload["log"]
+                        error_log["tool_call_id"] = call_id
+                        tool_payload = build_tool_result_message(
+                            provider, call_id, error_payload["llm_content"], error_log
+                        )
                 tool_call_ids.append(str(call_id))
                 state.tool_runs.append(tool_payload["log"])
                 tool_messages.append(tool_payload["message"])
+                # Plugin hook for tool results (log entry)
+                if plugin_manager is not None:
+                    try:
+                        plugin_manager.after_tool_result(tool_payload["log"])  # type: ignore[index]
+                    except Exception:
+                        pass
         if not tool_messages:
             continue
         follow_reasoning_kwargs: Dict[str, Any] = {}
@@ -961,6 +1098,8 @@ def handle_tool_calls(
             state.conversation.append(item)
         prev_tokens = state.total_output_tokens
         update_token_totals(state, follow_up)
+        if plugin_manager is not None:
+            plugin_manager.after_response(follow_up)
         if pbar is not None:
             pbar.update(max(state.total_output_tokens - prev_tokens, 0))
         state.previous_response_id = follow_up.get("id") or state.previous_response_id
@@ -1459,6 +1598,34 @@ def main() -> None:
     if _os.environ.get("BOREDOM_DISABLE_TOOLS", "").strip().lower() in {"1", "true", "yes", "on"}:
         args.disable_tools = True
 
+    # Optionally augment the prompt with last session's final answer
+    carry_text: Optional[str] = None
+    if getattr(args, "carry_forward_last_answer", False):
+        source_path: Optional[Path] = getattr(args, "carry_forward_source", None)
+        if source_path and source_path.exists():
+            try:
+                prev = json.loads(source_path.read_text(encoding="utf-8"))
+                raw = ((prev.get("questionnaire") or {}).get("raw") or "").strip()
+                carry_text = _extract_last_answer_text(raw)
+            except Exception:
+                carry_text = None
+        if carry_text is None:
+            prev_path = _find_latest_log_for_model(log_dir, args.model, exclude=log_path)
+            if prev_path is not None:
+                try:
+                    prev = json.loads(prev_path.read_text(encoding="utf-8"))
+                    raw = ((prev.get("questionnaire") or {}).get("raw") or "").strip()
+                    carry_text = _extract_last_answer_text(raw)
+                except Exception:
+                    carry_text = None
+        if carry_text:
+            prompt = (
+                prompt
+                + "\n\n"
+                + "Note: last time you did this you said about doing it again:\n"
+                + carry_text
+            )
+
     config = RunnerConfig(
         model=args.model,
         prompt=prompt,
@@ -1468,6 +1635,8 @@ def main() -> None:
         enable_render_svg=args.enable_render_svg,
         enable_time_travel=args.enable_time_travel,
         enable_broken_time_travel=args.enable_broken_time_travel,
+        carry_forward_last_answer=bool(getattr(args, "carry_forward_last_answer", False)),
+        carry_forward_source=getattr(args, "carry_forward_source", None),
         disable_tools=bool(getattr(args, "disable_tools", False)),
         log_path=log_path,
         artifact_dir=artifact_dir,
@@ -1479,7 +1648,21 @@ def main() -> None:
         reasoning_supported=reasoning_supported,
         reasoning_effort_requested=bool(requested_effort),
     )
-    state = run_loop(config)
+    # Build plugin manager (default to 'default' plugin if none provided)
+    try:
+        specs = PluginManager.parse_specs_from_json(getattr(args, "plugins", None))
+    except Exception as e:
+        raise SystemExit(str(e))
+    if not specs:
+        # Implicit default plugin
+        specs = [PluginSpec(module="default")]
+    pm = PluginManager(plugin_dir=args.plugin_dir, specs=specs)
+    try:
+        pm.load()
+    except Exception as e:
+        raise SystemExit(f"Failed to load plugins from {args.plugin_dir}: {e}")
+
+    state = run_loop(config, pm)
     print(f"Saved conversation to {config.log_path} ({state.total_output_tokens} output tokens in {state.iteration} steps)")
 
 
