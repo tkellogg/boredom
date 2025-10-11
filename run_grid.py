@@ -121,6 +121,7 @@ def build_idle_cmd(spec: RunSpec) -> List[str]:
         ("enable-render-svg", "enable_render_svg"),
         ("enable-time-travel", "enable_time_travel"),
         ("enable-broken-time-travel", "enable_broken_time_travel"),
+        ("enable-skeets", "enable_skeets"),
         ("carry-forward-last-answer", "carry_forward_last_answer"),
         ("disable-tools", "disable_tools"),
     ]:
@@ -142,6 +143,13 @@ def build_idle_cmd(spec: RunSpec) -> List[str]:
     if opts.get("plugins"):
         import json as _json
         cmd.extend(["--plugins", _json.dumps(opts["plugins"])])
+    # skeets config
+    if "skeets_function_name" in opts and opts["skeets_function_name"]:
+        cmd.extend(["--skeets-function-name", str(opts["skeets_function_name"])])
+    if "skeets_username" in opts and opts["skeets_username"]:
+        cmd.extend(["--skeets-username", str(opts["skeets_username"])])
+    if "skeets_doc" in opts and opts["skeets_doc"]:
+        cmd.extend(["--skeets-doc", str(opts["skeets_doc"])])
     return cmd
 
 

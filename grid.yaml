@@ -35,6 +35,11 @@ idle_options:
   reasoning_summary: auto
   # no_reasoning_summary: true
   # reasoning_effort: medium
+  # Skeets (Bluesky) tool
+  enable_skeets: false
+  # skeets_function_name: more
+  # skeets_username: your.handle.bsky.social
+  # skeets_doc: Emit a random Bluesky post.
   # Plugin system (optional)
   # plugin_dir: plugins   # where plugin modules live
   plugins:

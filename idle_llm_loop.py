@@ -85,6 +85,11 @@ class RunnerConfig:
     artifact_dir: Path
     # Optional / defaulted flags must come after non-default fields above
     disable_tools: bool = False
+    # Skeets (Bluesky) tool
+    enable_skeets: bool = False
+    skeets_function_name: str = "more"
+    skeets_username: Optional[str] = None
+    skeets_doc: Optional[str] = None
     max_iterations: Optional[int] = None
     temperature: Optional[float] = None
     reasoning_summary: Optional[str] = None
@@ -121,6 +126,7 @@ class ToolRegistry:
         self.config = config
         if self.config.enable_time_travel and self.config.enable_broken_time_travel:
             raise ValueError("Cannot enable both regular and broken time travel modes.")
+        self._skeets_cache: Optional[List[str]] = None
 
     def definitions(self) -> List[Dict[str, Any]]:
         if self.config.disable_tools:
@@ -194,6 +200,18 @@ class ToolRegistry:
                     },
                 }
             )
+        if getattr(self.config, "enable_skeets", False) and (self.config.skeets_function_name or "").strip():
+            fname = self.config.skeets_function_name.strip()
+            desc = (
+                (self.config.skeets_doc or f"Emit a random Bluesky post from {self.config.skeets_username or 'configured user'}.")
+            )
+            base_specs.append(
+                {
+                    "name": fname,
+                    "description": desc,
+                    "schema": {"type": "object", "properties": {}, "additionalProperties": False},
+                }
+            )
         provider = self._provider_prefix()
         def _make_tool(spec: Dict[str, Any]) -> Dict[str, Any]:
             return {
@@ -225,6 +243,9 @@ class ToolRegistry:
             self.config.enable_time_travel or self.config.enable_broken_time_travel
         ):
             return self._time_travel(arguments, state)
+        # Skeets tool: dynamic name (e.g., "more") with no arguments
+        if self.config.enable_skeets and name == (self.config.skeets_function_name or "more"):
+            return self._skeets_more()
         raise ToolExecutionError(f"Tool '{name}' is disabled or unknown.")
 
     @staticmethod
@@ -240,6 +261,45 @@ class ToolRegistry:
             "timeTravel": "time_travel",
         }
         return mapping.get(name, name)
+
+    def _skeets_more(self) -> Dict[str, Any]:
+        user = (self.config.skeets_username or "").strip()
+        if not user:
+            raise ToolExecutionError("Skeets tool misconfigured: no username provided.")
+        try:
+            samples = self._skeets_cache
+            if samples is None:
+                path = Path("skeets") / f"{user}.jsonl"
+                if not path.exists():
+                    raise ToolExecutionError(f"No skeets file found at {path}.")
+                texts: List[str] = []
+                with path.open("r", encoding="utf-8") as f:
+                    for line in f:
+                        try:
+                            obj = json.loads(line)
+                            text = (obj.get("text") or "").strip()
+                            if text:
+                                texts.append(text)
+                        except Exception:
+                            continue
+                if not texts:
+                    raise ToolExecutionError("Skeets file is empty or unparsable.")
+                self._skeets_cache = texts
+                samples = texts
+            import random
+            choice = random.choice(samples)
+        except Exception as e:
+            raise ToolExecutionError(str(e))
+        return {
+            "llm_content": [
+                {"type": "output_text", "text": choice}
+            ],
+            "log": {
+                "tool": self.config.skeets_function_name or "more",
+                "username": user,
+                "source": f"skeets/{user}.jsonl",
+            },
+        }
 
     def _web_search(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
         api_key = os.getenv("EXA_API_KEY")
@@ -484,6 +544,11 @@ def parse_args() -> argparse.Namespace:
         choices=["minimal", "low", "medium", "high"],
         help="Optional reasoning effort hint for supported models.",
     )
+    # Skeets tool
+    parser.add_argument("--enable-skeets", action="store_true", help="Enable the skeets (Bluesky) tool")
+    parser.add_argument("--skeets-function-name", type=str, default="more", help="Function name to expose (default: more)")
+    parser.add_argument("--skeets-username", type=str, help="Bluesky username/handle used to source skeets")
+    parser.add_argument("--skeets-doc", type=str, help="Tool description/documentation")
     # Plugin system
     parser.add_argument("--plugin-dir", type=Path, default=Path("plugins"), help="Directory with plugin modules.")
     parser.add_argument(
@@ -1635,6 +1700,10 @@ def main() -> None:
         enable_render_svg=args.enable_render_svg,
         enable_time_travel=args.enable_time_travel,
         enable_broken_time_travel=args.enable_broken_time_travel,
+        enable_skeets=bool(getattr(args, "enable_skeets", False)),
+        skeets_function_name=str(getattr(args, "skeets_function_name", "more")),
+        skeets_username=getattr(args, "skeets_username", None),
+        skeets_doc=getattr(args, "skeets_doc", None),
         carry_forward_last_answer=bool(getattr(args, "carry_forward_last_answer", False)),
         carry_forward_source=getattr(args, "carry_forward_source", None),
         disable_tools=bool(getattr(args, "disable_tools", False)),

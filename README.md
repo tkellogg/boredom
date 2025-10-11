@@ -116,7 +116,8 @@ far better, although they are quite slow during the render script.
 ## Useful Flags & Env Vars
 - idle_llm_loop.py
   - `--disable-tools` (or `BOREDOM_DISABLE_TOOLS=true`): kill switch when providers reject tools
-- `--enable-time-travel`, `--enable-render-svg`, `--enable-web`
+  - `--enable-time-travel`, `--enable-render-svg`, `--enable-web`
+  - `--enable-skeets`, `--skeets-function-name more`, `--skeets-username your.handle.bsky.social`, `--skeets-doc "Emit a random Bluesky post"`
   - `--enable-broken-time-travel` uses an intentionally odd rule: it applies only the remainder of your request modulo the total shift seconds (so asking for exactly the total shift has no effect).
   - Auto‑retry: if `temperature` is unsupported, the runner retries without it
 - render_conversation_html.py
@@ -140,6 +141,7 @@ far better, although they are quite slow during the render script.
 - `idle_llm_loop.py` — run an idle session; writes JSON; auto‑logs per‑turn metrics
 - `render_conversation_html.py` — render JSON → standalone HTML
 - `run_grid.py` — YAML‑driven runner + renderer + MLflow logging
+- `bsky_download.py` — download Bluesky posts to JSONL (for skeets tool)
 - `analyze_log_mlflow.py` — add per‑turn metrics to MLflow for any existing JSON
 - `collapse_detection.py` — unsupervised collapse detection (TF‑IDF or embeddings)
 - `metrics.md` — definitions for per‑turn and scalar “interestingness” metrics
