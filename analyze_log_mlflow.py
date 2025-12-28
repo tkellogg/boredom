@@ -378,6 +378,57 @@ def _kmeans(X: List[List[float]], k: int, iters: int = 50, seed: int = 0) -> Lis
     return assigns
 
 
+def _vendi_score(embs: List[List[float]]) -> Optional[float]:
+    """Compute Vendi Score: exponential of Shannon entropy of eigenvalues of similarity matrix.
+
+    The Vendi Score measures diversity as the "effective number of distinct items" in a set,
+    accounting for similarity between items. It's the exponential of the Shannon entropy of
+    the eigenvalues of a positive semi-definite similarity matrix.
+
+    - Score ≈ 1: All items essentially identical (collapsed)
+    - Score = N: All N items completely distinct (maximum diversity)
+
+    For text embeddings, we use cosine similarity as the kernel.
+    """
+    try:
+        from vendi_score import vendi
+        import numpy as np
+    except ImportError:
+        return None
+
+    B = len(embs)
+    if B <= 1:
+        return float(B) if B == 1 else None
+
+    # Build cosine similarity matrix (embeddings assumed L2-normalized)
+    X = np.array(embs, dtype=float)
+    K = X @ X.T  # Cosine similarity since embeddings are normalized
+
+    # Ensure K is valid PSD matrix (clamp small negative eigenvalues from numerical error)
+    K = (K + K.T) / 2  # Ensure symmetric
+
+    try:
+        score = vendi.score_K(K)
+        return float(score)
+    except Exception:
+        return None
+
+
+def _vendi_score_normalized(embs: List[List[float]]) -> Optional[float]:
+    """Vendi Score normalized to [0,1] by dividing by number of samples.
+
+    - 0: All items identical (collapsed)
+    - 1: All items completely distinct (maximum diversity)
+    """
+    score = _vendi_score(embs)
+    if score is None:
+        return None
+    B = len(embs)
+    if B <= 0:
+        return None
+    return score / B
+
+
 def _entropy_rate(assigns: List[int], k: int) -> Optional[float]:
     import math
     # Build transitions with Laplace smoothing
@@ -449,6 +500,10 @@ def compute_conversation_metrics(
     metrics["assistant.cde"] = metrics["assistant.distance_entropy"]
     metrics["assistant.spectral_entropy"] = _spectral_entropy(embs)
     metrics["assistant.spherical_dispersion"] = _spherical_dispersion(embs)
+    # Vendi Score: effective number of distinct items (range: 1 to B)
+    metrics["assistant.vendi_score"] = _vendi_score(embs)
+    # Vendi Score normalized to [0,1] (for comparison across runs with different B)
+    metrics["assistant.vendi_score_normalized"] = _vendi_score_normalized(embs)
     # Entropy rate via clustering
     import math
     k = max(3, min(8, int(math.sqrt(B)))) if B >= 3 else None
@@ -462,6 +517,8 @@ def compute_conversation_metrics(
         metrics["assistant.cde_trim"] = metrics["assistant.distance_entropy_trim"]
         metrics["assistant.spectral_entropy_trim"] = _spectral_entropy(emt)
         metrics["assistant.spherical_dispersion_trim"] = _spherical_dispersion(emt)
+        metrics["assistant.vendi_score_trim"] = _vendi_score(emt)
+        metrics["assistant.vendi_score_normalized_trim"] = _vendi_score_normalized(emt)
         if k and len(emt) >= 3:
             import math
             kt = max(3, min(8, int(math.sqrt(len(emt)))))

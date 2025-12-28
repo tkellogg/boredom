@@ -36,7 +36,19 @@ These are computed over unit embeddings of all assistant turns (and a trimmed va
   - Cluster turns into k states (k ≈ min(8, max(3, ⌊√B⌋))) with k‑means on embeddings.
   - Estimate a Markov transition matrix P with Laplace smoothing and its stationary distribution π by power iteration.
   - Entropy rate H = −Σᵢ πᵢ Σⱼ Pᵢⱼ log Pᵢⱼ, normalized by log k.
-  - Intuition: captures unpredictability over time; loops have low entropy rate even if two “poles” exist.
+  - Intuition: captures unpredictability over time; loops have low entropy rate even if two "poles" exist.
+
+- `assistant.vendi_score`
+  - The Vendi Score measures diversity as the "effective number of distinct items" in a set, accounting for similarity between items.
+  - Computed as the exponential of the Shannon entropy of the eigenvalues of the cosine similarity matrix K (where Kᵢⱼ = cos(eᵢ, eⱼ)).
+  - Range: [1, B] where B = number of turns. Score ≈ 1 means all items essentially identical (collapsed); Score = B means all items completely distinct.
+  - Intuition: unlike entropy metrics that measure spread or temporal patterns, Vendi Score directly answers "how many effectively distinct modes exist in this conversation?"
+  - Reference: [Friedman & Dieng, 2022](https://arxiv.org/abs/2210.02410)
+
+- `assistant.vendi_score_normalized`
+  - Vendi Score divided by B (number of turns), yielding a value in [0, 1] for comparison across runs with different lengths.
+  - Score ≈ 0: highly collapsed (few distinct modes despite many turns).
+  - Score ≈ 1: high diversity (each turn is distinct).
 
 ### Trimmed Variants
 We also log `_trim` metrics (e.g., `assistant.cde_trim`) computed on turns 2…B−1 to avoid intro/outro bias.
