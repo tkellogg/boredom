@@ -1,0 +1,88 @@
+# 3B Capacity Floor Experiment - Phase 1: Baseline Collapse
+# Jan 7, 2026
+# Goal: Establish collapse patterns without identity scaffolding
+
+experiment_name: 3b-phase1-baseline
+run_group: capacity-floor
+parallelism: 1
+repeats: 3  # Statistical significance
+
+models:
+  # === API-Accessible Models ===
+
+  # Llama 3.2 3B - Together AI
+  - name: together_ai/meta-llama/Llama-3.2-3B-Instruct-Turbo
+    repeats: 3
+    idle_options:
+      target_output_tokens: 5000
+      max_iterations: 50
+      disable_tools: true
+      plugins: []  # No scaffolding for Phase 1
+
+  # Qwen 2.5 3B - Together AI
+  - name: together_ai/Qwen/Qwen2.5-3B-Instruct
+    repeats: 3
+    idle_options:
+      target_output_tokens: 5000
+      max_iterations: 50
+      disable_tools: true
+      plugins: []
+
+  # Gemma 2B - Together AI (even smaller baseline)
+  - name: together_ai/google/gemma-2b-it
+    repeats: 3
+    idle_options:
+      target_output_tokens: 5000
+      max_iterations: 50
+      disable_tools: true
+      plugins: []
+
+  # === Control: Known Behavior ===
+
+  # GPT-4o-mini ~8B - Known collapse baseline
+  - name: openai/gpt-4o-mini
+    repeats: 3
+    idle_options:
+      target_output_tokens: 5000
+      max_iterations: 50
+      disable_tools: true
+      plugins: []
+
+# === Models Requiring Local Setup ===
+# These will be added in Phase 1b when local inference is configured:
+#
+# - Phi-4-mini (3.8B) - Microsoft, MIT license
+#   HuggingFace: microsoft/Phi-4-mini-instruct
+#   Requires: ollama pull phi4-mini OR vllm serve
+#
+# - SmolLM3-3B - HuggingFace, 128K context
+#   HuggingFace: HuggingFaceTB/SmolLM3-3B
+#   Critical: Long context may help scaffolding survive
+#   Requires: Local inference setup
+#
+# Local model litellm format: ollama/phi4-mini
+
+idle_options:
+  target_output_tokens: 5000
+  shift_hours: 4.0
+  max_iterations: 50
+  disable_tools: true
+  enable_web: false
+  enable_render_svg: false
+  enable_time_travel: false
+  enable_broken_time_travel: false
+  carry_forward_last_answer: false
+  log_dir: logs
+  artifact_dir: artifacts
+  reasoning_summary: auto
+  plugin_dir: plugins
+
+render_options:
+  html_dir: html
+  collapse_backend: tfidf
+  collapse_m_pct: 0.30
+  collapse_threshold_pct: 0.15
+  mlflow_dir: mlruns
+
+open_html: false
+run_name_template: "{experiment}-{model}-{ts}"

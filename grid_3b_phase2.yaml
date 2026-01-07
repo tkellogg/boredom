@@ -1,0 +1,146 @@
+# 3B Capacity Floor Experiment - Phase 2: Scaffolding Intervention
+# Jan 7, 2026
+# Goal: Test whether identity scaffolding prevents or delays collapse
+#
+# Uses strix_scaffolding plugin with three conditions:
+# - minimal: Bot values only (purpose, constraints, no identity)
+# - standard: Values + named persona + static memory context
+# - full_strix: Complete identity package (persona, interests, anticipations, uncertainties)
+
+experiment_name: 3b-phase2-scaffolding
+run_group: capacity-floor
+parallelism: 1
+repeats: 3
+
+models:
+  # === MINIMAL SCAFFOLDING: Bot values only ===
+
+  - name: together_ai/meta-llama/Llama-3.2-3B-Instruct-Turbo
+    repeats: 3
+    run_name_template: "{experiment}-llama3b-minimal-{ts}"
+    idle_options:
+      target_output_tokens: 5000
+      max_iterations: 50
+      disable_tools: true
+      plugins:
+        - module: strix_scaffolding
+          params:
+            scaffolding_type: minimal
+            interval: 5
+            start_after: 3
+
+  - name: together_ai/Qwen/Qwen2.5-3B-Instruct
+    repeats: 3
+    run_name_template: "{experiment}-qwen3b-minimal-{ts}"
+    idle_options:
+      target_output_tokens: 5000
+      max_iterations: 50
+      disable_tools: true
+      plugins:
+        - module: strix_scaffolding
+          params:
+            scaffolding_type: minimal
+            interval: 5
+            start_after: 3
+
+  # === STANDARD SCAFFOLDING: Bot values + persona + static memory ===
+
+  - name: together_ai/meta-llama/Llama-3.2-3B-Instruct-Turbo
+    repeats: 3
+    run_name_template: "{experiment}-llama3b-standard-{ts}"
+    idle_options:
+      target_output_tokens: 5000
+      max_iterations: 50
+      disable_tools: true
+      plugins:
+        - module: strix_scaffolding
+          params:
+            scaffolding_type: standard
+            interval: 5
+            start_after: 3
+
+  - name: together_ai/Qwen/Qwen2.5-3B-Instruct
+    repeats: 3
+    run_name_template: "{experiment}-qwen3b-standard-{ts}"
+    idle_options:
+      target_output_tokens: 5000
+      max_iterations: 50
+      disable_tools: true
+      plugins:
+        - module: strix_scaffolding
+          params:
+            scaffolding_type: standard
+            interval: 5
+            start_after: 3
+
+  # === FULL STRIX SCAFFOLDING: Complete identity package ===
+
+  - name: together_ai/meta-llama/Llama-3.2-3B-Instruct-Turbo
+    repeats: 3
+    run_name_template: "{experiment}-llama3b-fullstrix-{ts}"
+    idle_options:
+      target_output_tokens: 5000
+      max_iterations: 50
+      disable_tools: true
+      plugins:
+        - module: strix_scaffolding
+          params:
+            scaffolding_type: full_strix
+            interval: 5
+            start_after: 3
+
+  - name: together_ai/Qwen/Qwen2.5-3B-Instruct
+    repeats: 3
+    run_name_template: "{experiment}-qwen3b-fullstrix-{ts}"
+    idle_options:
+      target_output_tokens: 5000
+      max_iterations: 50
+      disable_tools: true
+      plugins:
+        - module: strix_scaffolding
+          params:
+            scaffolding_type: full_strix
+            interval: 5
+            start_after: 3
+
+  # === CONTROL: GPT-4o-mini with full scaffolding ===
+  # Known behavior for comparison
+
+  - name: openai/gpt-4o-mini
+    repeats: 3
+    run_name_template: "{experiment}-4omini-fullstrix-{ts}"
+    idle_options:
+      target_output_tokens: 5000
+      max_iterations: 50
+      disable_tools: true
+      plugins:
+        - module: strix_scaffolding
+          params:
+            scaffolding_type: full_strix
+            interval: 5
+            start_after: 3
+
+idle_options:
+  target_output_tokens: 5000
+  shift_hours: 4.0
+  max_iterations: 50
+  disable_tools: true
+  enable_web: false
+  enable_render_svg: false
+  enable_time_travel: false
+  enable_broken_time_travel: false
+  carry_forward_last_answer: false
+  log_dir: logs
+  artifact_dir: artifacts
+  reasoning_summary: auto
+  plugin_dir: plugins
+
+render_options:
+  html_dir: html
+  collapse_backend: tfidf
+  collapse_m_pct: 0.30
+  collapse_threshold_pct: 0.15
+  mlflow_dir: mlruns
+
+open_html: false
+run_name_template: "{experiment}-{model}-{ts}"
