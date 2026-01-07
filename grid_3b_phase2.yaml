@@ -1,7 +1,7 @@
 # Small Model Capacity Floor Experiment - Phase 2: Scaffolding Intervention
 # Updated: Jan 7, 2026
 # Goal: Test whether identity scaffolding prevents or delays collapse
-# Models: Llama-3.2-3B, Qwen3-4B (smallest Qwen3 dense), GPT-4o-mini control
+# Models: Llama-3.2-3B, Qwen3-4B, Qwen2.5-3B, Qwen2.5-1.5B, GPT-4o-mini control
 # Providers: Together AI + OpenRouter (per Tim's guidance: cheaper + easier than RunPod)
 #
 # Uses strix_scaffolding plugin with three conditions:
@@ -33,7 +33,35 @@ models:
 
   - name: openrouter/qwen/qwen3-4b:free
     repeats: 3
-    run_name_template: "{experiment}-qwen4b-minimal-{ts}"
+    run_name_template: "{experiment}-qwen3-4b-minimal-{ts}"
+    idle_options:
+      target_output_tokens: 5000
+      max_iterations: 50
+      disable_tools: true
+      plugins:
+        - module: strix_scaffolding
+          params:
+            scaffolding_type: minimal
+            interval: 5
+            start_after: 3
+
+  - name: openrouter/qwen/qwen-2.5-3b-instruct:free
+    repeats: 3
+    run_name_template: "{experiment}-qwen2.5-3b-minimal-{ts}"
+    idle_options:
+      target_output_tokens: 5000
+      max_iterations: 50
+      disable_tools: true
+      plugins:
+        - module: strix_scaffolding
+          params:
+            scaffolding_type: minimal
+            interval: 5
+            start_after: 3
+
+  - name: openrouter/qwen/qwen-2.5-1.5b-instruct:free
+    repeats: 3
+    run_name_template: "{experiment}-qwen2.5-1.5b-minimal-{ts}"
     idle_options:
       target_output_tokens: 5000
       max_iterations: 50
@@ -63,7 +91,35 @@ models:
 
   - name: openrouter/qwen/qwen3-4b:free
     repeats: 3
-    run_name_template: "{experiment}-qwen4b-standard-{ts}"
+    run_name_template: "{experiment}-qwen3-4b-standard-{ts}"
+    idle_options:
+      target_output_tokens: 5000
+      max_iterations: 50
+      disable_tools: true
+      plugins:
+        - module: strix_scaffolding
+          params:
+            scaffolding_type: standard
+            interval: 5
+            start_after: 3
+
+  - name: openrouter/qwen/qwen-2.5-3b-instruct:free
+    repeats: 3
+    run_name_template: "{experiment}-qwen2.5-3b-standard-{ts}"
+    idle_options:
+      target_output_tokens: 5000
+      max_iterations: 50
+      disable_tools: true
+      plugins:
+        - module: strix_scaffolding
+          params:
+            scaffolding_type: standard
+            interval: 5
+            start_after: 3
+
+  - name: openrouter/qwen/qwen-2.5-1.5b-instruct:free
+    repeats: 3
+    run_name_template: "{experiment}-qwen2.5-1.5b-standard-{ts}"
     idle_options:
       target_output_tokens: 5000
       max_iterations: 50
@@ -93,7 +149,35 @@ models:
 
   - name: openrouter/qwen/qwen3-4b:free
     repeats: 3
-    run_name_template: "{experiment}-qwen4b-fullstrix-{ts}"
+    run_name_template: "{experiment}-qwen3-4b-fullstrix-{ts}"
+    idle_options:
+      target_output_tokens: 5000
+      max_iterations: 50
+      disable_tools: true
+      plugins:
+        - module: strix_scaffolding
+          params:
+            scaffolding_type: full_strix
+            interval: 5
+            start_after: 3
+
+  - name: openrouter/qwen/qwen-2.5-3b-instruct:free
+    repeats: 3
+    run_name_template: "{experiment}-qwen2.5-3b-fullstrix-{ts}"
+    idle_options:
+      target_output_tokens: 5000
+      max_iterations: 50
+      disable_tools: true
+      plugins:
+        - module: strix_scaffolding
+          params:
+            scaffolding_type: full_strix
+            interval: 5
+            start_after: 3
+
+  - name: openrouter/qwen/qwen-2.5-1.5b-instruct:free
+    repeats: 3
+    run_name_template: "{experiment}-qwen2.5-1.5b-fullstrix-{ts}"
     idle_options:
       target_output_tokens: 5000
       max_iterations: 50

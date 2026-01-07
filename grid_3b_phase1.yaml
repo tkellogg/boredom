@@ -1,7 +1,7 @@
 # Small Model Capacity Floor Experiment - Phase 1: Baseline Collapse
 # Updated: Jan 7, 2026
 # Goal: Establish collapse patterns without identity scaffolding
-# Models: Llama-3.2-3B, Qwen3-4B (smallest Qwen3 dense), Gemma-2B, GPT-4o-mini control
+# Models: Llama-3.2-3B, Qwen3-4B, Qwen2.5-3B, Qwen2.5-1.5B, Gemma-2B, GPT-4o-mini control
 # Providers: Together AI + OpenRouter (per Tim's guidance: cheaper + easier than RunPod)
 
 experiment_name: 3b-phase1-baseline
@@ -24,6 +24,24 @@ models:
   # Qwen3 4B - OpenRouter (smallest Qwen3 dense model)
   # Note: Qwen3 doesn't have a 3B - 4B is smallest dense, pairs better with Qwen3-30B/32B
   - name: openrouter/qwen/qwen3-4b:free
+    repeats: 3
+    idle_options:
+      target_output_tokens: 5000
+      max_iterations: 50
+      disable_tools: true
+      plugins: []
+
+  # Qwen2.5 3B - Keep for continuity with prior experiments
+  - name: openrouter/qwen/qwen-2.5-3b-instruct:free
+    repeats: 3
+    idle_options:
+      target_output_tokens: 5000
+      max_iterations: 50
+      disable_tools: true
+      plugins: []
+
+  # Qwen2.5 1.5B - Going crazy, testing the floor
+  - name: openrouter/qwen/qwen-2.5-1.5b-instruct:free
     repeats: 3
     idle_options:
       target_output_tokens: 5000
