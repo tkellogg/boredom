@@ -1,6 +1,8 @@
-# 3B Capacity Floor Experiment - Phase 1: Baseline Collapse
-# Jan 7, 2026
+# Small Model Capacity Floor Experiment - Phase 1: Baseline Collapse
+# Updated: Jan 7, 2026
 # Goal: Establish collapse patterns without identity scaffolding
+# Models: Llama-3.2-3B, Qwen3-4B (smallest Qwen3 dense), Gemma-2B, GPT-4o-mini control
+# Providers: Together AI + OpenRouter (per Tim's guidance: cheaper + easier than RunPod)
 
 experiment_name: 3b-phase1-baseline
 run_group: capacity-floor
@@ -19,8 +21,9 @@ models:
       disable_tools: true
       plugins: []  # No scaffolding for Phase 1
 
-  # Qwen 2.5 3B - Together AI
-  - name: together_ai/Qwen/Qwen2.5-3B-Instruct
+  # Qwen3 4B - OpenRouter (smallest Qwen3 dense model)
+  # Note: Qwen3 doesn't have a 3B - 4B is smallest dense, pairs better with Qwen3-30B/32B
+  - name: openrouter/qwen/qwen3-4b:free
     repeats: 3
     idle_options:
       target_output_tokens: 5000
