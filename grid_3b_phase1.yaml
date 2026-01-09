@@ -48,14 +48,14 @@ models:
       disable_tools: true
       plugins: []
 
-  # Gemma 3 Nano 2B - OpenRouter free tier (floor test)
-  - name: openrouter/google/gemma-3n-e2b-it:free
-    repeats: 3
-    idle_options:
-      target_output_tokens: 5000
-      max_iterations: 50
-      disable_tools: true
-      plugins: []
+  # Gemma 3 Nano 2B - DISABLED (OpenRouter error: "Developer instruction is not enabled")
+  # - name: openrouter/google/gemma-3n-e2b-it:free
+  #   repeats: 3
+  #   idle_options:
+  #     target_output_tokens: 5000
+  #     max_iterations: 50
+  #     disable_tools: true
+  #     plugins: []
 
   # === Control: Known Behavior ===
 
