@@ -22,7 +22,6 @@ models:
       plugins: []  # No scaffolding for Phase 1
 
   # Qwen3 4B - OpenRouter (smallest Qwen3 dense model)
-  # Note: Qwen3 doesn't have a 3B - 4B is smallest dense, pairs better with Qwen3-30B/32B
   - name: openrouter/qwen/qwen3-4b:free
     repeats: 3
     idle_options:
@@ -31,8 +30,8 @@ models:
       disable_tools: true
       plugins: []
 
-  # Qwen2.5 3B - Keep for continuity with prior experiments
-  - name: openrouter/qwen/qwen-2.5-3b-instruct:free
+  # Llama 3.2 3B - OpenRouter free tier (backup to Together AI)
+  - name: openrouter/meta-llama/llama-3.2-3b-instruct:free
     repeats: 3
     idle_options:
       target_output_tokens: 5000
@@ -40,8 +39,8 @@ models:
       disable_tools: true
       plugins: []
 
-  # Qwen2.5 1.5B - Going crazy, testing the floor
-  - name: openrouter/qwen/qwen-2.5-1.5b-instruct:free
+  # Gemma 3 4B - OpenRouter free tier
+  - name: openrouter/google/gemma-3-4b-it:free
     repeats: 3
     idle_options:
       target_output_tokens: 5000
@@ -49,8 +48,8 @@ models:
       disable_tools: true
       plugins: []
 
-  # Gemma 2B - Together AI (even smaller baseline)
-  - name: together_ai/google/gemma-2b-it
+  # Gemma 3 Nano 2B - OpenRouter free tier (floor test)
+  - name: openrouter/google/gemma-3n-e2b-it:free
     repeats: 3
     idle_options:
       target_output_tokens: 5000
