@@ -16,6 +16,7 @@ experiment_name: qwen3-4b-thinking
 run_group: capacity-floor
 parallelism: 1
 repeats: 3
+run_delay_seconds: 45  # Rate limit protection for OpenRouter free tier
 
 models:
   # === PHASE 1: BASELINE (NO SCAFFOLDING) ===

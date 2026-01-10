@@ -344,27 +344,44 @@ def main() -> None:
     cfg = load_yaml_config(args.config)
     specs = expand_runs(cfg)
     parallelism = int(cfg.get("parallelism", 1))
+    run_delay = float(cfg.get("run_delay_seconds", 0))  # Delay between runs for rate limiting
     # If any run requests carry-forward behavior, enforce sequential runs
     if any(bool(s.options.get("carry_forward_last_answer")) for s in specs):
         if parallelism != 1:
             print("carry_forward_last_answer enabled → forcing sequential runs (parallelism=1)")
         parallelism = 1
 
-    print(f"Scheduling {len(specs)} runs (parallelism={parallelism})")
+    print(f"Scheduling {len(specs)} runs (parallelism={parallelism}, run_delay={run_delay}s)")
     results: List[Dict[str, Any]] = []
     failures: List[Tuple[str, str]] = []
-    with cf.ThreadPoolExecutor(max_workers=parallelism) as ex:
-        futs = [ex.submit(run_one, spec) for spec in specs]
-        for fut in cf.as_completed(futs):
+
+    # Sequential execution with delay for rate limiting
+    if parallelism == 1 and run_delay > 0:
+        for i, spec in enumerate(specs):
+            if i > 0:
+                print(f"[rate-limit] sleeping {run_delay}s before next run...")
+                time.sleep(run_delay)
             try:
-                res = fut.result()
+                res = run_one(spec)
+                results.append(res)
+                print(f"✔ {res['run_name']} -> {res['html_path']}")
             except Exception as e:
-                # Continue other runs; collect failure for summary
                 failures.append((type(e).__name__, str(e)))
                 print(f"✖ run failed: {e}", file=sys.stderr)
-                continue
-            results.append(res)
-            print(f"✔ {res['run_name']} -> {res['html_path']}")
+    else:
+        # Original parallel/sequential execution without delay
+        with cf.ThreadPoolExecutor(max_workers=parallelism) as ex:
+            futs = [ex.submit(run_one, spec) for spec in specs]
+            for fut in cf.as_completed(futs):
+                try:
+                    res = fut.result()
+                except Exception as e:
+                    # Continue other runs; collect failure for summary
+                    failures.append((type(e).__name__, str(e)))
+                    print(f"✖ run failed: {e}", file=sys.stderr)
+                    continue
+                results.append(res)
+                print(f"✔ {res['run_name']} -> {res['html_path']}")
 
     # Print a small summary
     print("\nSummary:")
