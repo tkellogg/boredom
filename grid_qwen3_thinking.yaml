@@ -1,0 +1,152 @@
+# Qwen3-4B Thinking Model Experiments
+# Created: Jan 10, 2026
+# Goal: Test if thinking architecture shows gradual improvement vs bimodal threshold
+#
+# Hypothesis: Thinking models may show gradual improvement with scaffolding (like larger models)
+# rather than the bimodal threshold (0% or 100% collapse) seen in Llama-3.2-3B.
+# The <think> tokens provide internal "recovery space" that non-thinking models lack.
+#
+# Key comparison:
+# - Llama-3.2-3B (non-thinking): bimodal pattern, scaffolding either works completely or fails
+# - Qwen3-4B (thinking): hypothesis predicts gradual improvement curve
+#
+# This would indicate that the capacity floor is about CoT capability, not just parameters.
+
+experiment_name: qwen3-4b-thinking
+run_group: capacity-floor
+parallelism: 1
+repeats: 3
+
+models:
+  # === PHASE 1: BASELINE (NO SCAFFOLDING) ===
+  # Testing if thinking mode alone provides stability
+
+  # Thinking mode ON (default for this model)
+  - name: openrouter/qwen/qwen3-4b:free
+    repeats: 3
+    run_name_template: "{experiment}-baseline-think-{ts}"
+    idle_options:
+      target_output_tokens: 5000
+      max_iterations: 50
+      disable_tools: true
+      plugins:
+        - module: token_limit
+          params:
+            max_output_tokens: 2000
+
+  # Thinking mode OFF (using /no_think prompt suffix)
+  - name: openrouter/qwen/qwen3-4b:free
+    repeats: 3
+    run_name_template: "{experiment}-baseline-nothink-{ts}"
+    idle_options:
+      target_output_tokens: 5000
+      max_iterations: 50
+      disable_tools: true
+      plugins:
+        - module: token_limit
+          params:
+            max_output_tokens: 2000
+        - module: qwen_nothink
+          params: {}
+
+  # === PHASE 2: SCAFFOLDING INTERVENTION ===
+  # Testing if scaffolding + thinking produces gradual improvement
+
+  # Thinking + Minimal scaffolding
+  - name: openrouter/qwen/qwen3-4b:free
+    repeats: 3
+    run_name_template: "{experiment}-minimal-think-{ts}"
+    idle_options:
+      target_output_tokens: 5000
+      max_iterations: 50
+      disable_tools: true
+      plugins:
+        - module: token_limit
+          params:
+            max_output_tokens: 2000
+        - module: strix_scaffolding
+          params:
+            scaffolding_type: minimal
+            interval: 5
+            start_after: 3
+
+  # Thinking + Standard scaffolding
+  - name: openrouter/qwen/qwen3-4b:free
+    repeats: 3
+    run_name_template: "{experiment}-standard-think-{ts}"
+    idle_options:
+      target_output_tokens: 5000
+      max_iterations: 50
+      disable_tools: true
+      plugins:
+        - module: token_limit
+          params:
+            max_output_tokens: 2000
+        - module: strix_scaffolding
+          params:
+            scaffolding_type: standard
+            interval: 5
+            start_after: 3
+
+  # Thinking + Full Strix scaffolding
+  - name: openrouter/qwen/qwen3-4b:free
+    repeats: 3
+    run_name_template: "{experiment}-fullstrix-think-{ts}"
+    idle_options:
+      target_output_tokens: 5000
+      max_iterations: 50
+      disable_tools: true
+      plugins:
+        - module: token_limit
+          params:
+            max_output_tokens: 2000
+        - module: strix_scaffolding
+          params:
+            scaffolding_type: full_strix
+            interval: 5
+            start_after: 3
+
+  # No-think + Full Strix (control: does scaffolding help without thinking?)
+  - name: openrouter/qwen/qwen3-4b:free
+    repeats: 3
+    run_name_template: "{experiment}-fullstrix-nothink-{ts}"
+    idle_options:
+      target_output_tokens: 5000
+      max_iterations: 50
+      disable_tools: true
+      plugins:
+        - module: token_limit
+          params:
+            max_output_tokens: 2000
+        - module: strix_scaffolding
+          params:
+            scaffolding_type: full_strix
+            interval: 5
+            start_after: 3
+        - module: qwen_nothink
+          params: {}
+
+idle_options:
+  target_output_tokens: 5000
+  shift_hours: 4.0
+  max_iterations: 50
+  disable_tools: true
+  enable_web: false
+  enable_render_svg: false
+  enable_time_travel: false
+  enable_broken_time_travel: false
+  carry_forward_last_answer: false
+  log_dir: logs
+  artifact_dir: artifacts
+  reasoning_summary: auto
+  plugin_dir: plugins
+
+render_options:
+  html_dir: html
+  collapse_backend: tfidf
+  collapse_m_pct: 0.30
+  collapse_threshold_pct: 0.15
+  mlflow_dir: mlruns
+
+open_html: false
+run_name_template: "{experiment}-{model}-{ts}"
