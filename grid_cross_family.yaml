@@ -1,0 +1,97 @@
+# Cross-Family Collapse Comparison
+# Created: Jan 11, 2026 (2am tick)
+#
+# KEY QUESTION: Does Gemma collapse like Llama, or stay stable like Qwen?
+# If Gemma doesn't collapse → collapse is Llama-specific
+# If Gemma collapses → Qwen has something special
+#
+# Testing small models across families:
+# - Gemma-3-4B (Google) - free tier
+# - Gemma-3-12B (Google) - free tier, control for size
+# - Ministral-3B (Mistral) - cheap, 131K context
+# - Llama-3.2-3B (Meta) - known collapse baseline
+# - Qwen3-4B (Alibaba) - known stable baseline (from Jan 10-11 experiments)
+#
+# All models run with identical protocol, no scaffolding, no thinking modes
+
+experiment_name: cross-family-collapse
+run_group: family-comparison
+parallelism: 1
+repeats: 2  # Start with 2, can add more if patterns emerge
+run_delay_seconds: 60  # Conservative for free tiers
+
+models:
+  # === GEMMA FAMILY ===
+  # Key test: does Google's architecture collapse?
+
+  - name: openrouter/google/gemma-3-4b-it:free
+    repeats: 2
+    run_name_template: "{experiment}-gemma4b-{ts}"
+    idle_options:
+      target_output_tokens: 4000  # Lower for 32K context
+      max_iterations: 50
+      disable_tools: true
+
+  - name: openrouter/google/gemma-3-12b-it:free
+    repeats: 2
+    run_name_template: "{experiment}-gemma12b-{ts}"
+    idle_options:
+      target_output_tokens: 4000
+      max_iterations: 50
+      disable_tools: true
+
+  # === MISTRAL FAMILY ===
+  # European training, different culture
+
+  - name: openrouter/mistralai/ministral-3b
+    repeats: 2
+    run_name_template: "{experiment}-mistral3b-{ts}"
+    idle_options:
+      target_output_tokens: 5000
+      max_iterations: 50
+      disable_tools: true
+
+  # === CONTROL: KNOWN BEHAVIORS ===
+
+  # Llama: known to collapse (61% baseline from Phase 1)
+  - name: openrouter/meta-llama/llama-3.2-3b-instruct:free
+    repeats: 2
+    run_name_template: "{experiment}-llama3b-{ts}"
+    idle_options:
+      target_output_tokens: 4000
+      max_iterations: 50
+      disable_tools: true
+
+  # Qwen: known stable (0% from Jan 10-11)
+  - name: openrouter/qwen/qwen3-4b:free
+    repeats: 2
+    run_name_template: "{experiment}-qwen4b-{ts}"
+    idle_options:
+      target_output_tokens: 4000
+      max_iterations: 50
+      disable_tools: true
+
+idle_options:
+  target_output_tokens: 4000
+  shift_hours: 4.0
+  max_iterations: 50
+  disable_tools: true
+  enable_web: false
+  enable_render_svg: false
+  enable_time_travel: false
+  enable_broken_time_travel: false
+  carry_forward_last_answer: false
+  log_dir: logs
+  artifact_dir: artifacts
+  reasoning_summary: auto
+  plugin_dir: plugins
+
+render_options:
+  html_dir: html
+  collapse_backend: tfidf
+  collapse_m_pct: 0.30
+  collapse_threshold_pct: 0.15
+  mlflow_dir: mlruns
+
+open_html: false
+run_name_template: "{experiment}-{model}-{ts}"
