@@ -575,7 +575,7 @@ def run_grid(
     # Notify completion
     completed = sum(1 for c in state["cells"].values() if c["status"] == "completed")
     failed = sum(1 for c in state["cells"].values() if c["status"] == "failed")
-    notify_discord(f"🦉 Scaffold grid finished! {completed} completed, {failed} failed. Results in {RESULTS_DIR}")
+    notify_discord(f"📊 Scaffold grid finished! {completed} completed, {failed} failed. Results in {RESULTS_DIR}")
 
 
 def print_summary(state: Dict[str, Any]) -> None:
@@ -643,7 +643,7 @@ if __name__ == "__main__":
         main()
     except Exception as e:
         import traceback
-        error_msg = f"🔥 Scaffold grid CRASHED: {type(e).__name__}: {e}"
+        error_msg = f"💥 Scaffold grid CRASHED: {type(e).__name__}: {e}"
         print(error_msg)
         traceback.print_exc()
         notify_discord(error_msg)
