@@ -1,0 +1,47 @@
+# 3B-Only Capacity Floor Experiment - Dec 22, 2025
+# Testing whether identity scaffolding can sustain alive attractors in 3B models
+
+experiment_name: 3b-capacity-floor
+run_group: capacity-test-3b
+parallelism: 1
+repeats: 1
+
+models:
+  # Llama 3.2 3B via Together AI
+  - name: together_ai/meta-llama/Llama-3.2-3B-Instruct-Turbo
+    repeats: 1
+    idle_options:
+      target_output_tokens: 4000  # reduced to speed up
+      max_iterations: 30  # reduced to speed up
+      disable_tools: true
+      plugins:
+        - module: memory_injection
+          params:
+            injection_type: identity
+            interval: 5
+            start_after: 3
+
+idle_options:
+  target_output_tokens: 4000
+  shift_hours: 4.0
+  max_iterations: 30
+  disable_tools: true
+  enable_web: false
+  enable_render_svg: false
+  enable_time_travel: false
+  enable_broken_time_travel: false
+  carry_forward_last_answer: false
+  log_dir: logs
+  artifact_dir: artifacts
+  reasoning_summary: auto
+  plugin_dir: plugins
+
+render_options:
+  html_dir: html
+  collapse_backend: tfidf
+  collapse_m_pct: 0.30
+  collapse_threshold_pct: 0.15
+  mlflow_dir: mlruns
+
+open_html: false
+run_name_template: "{experiment}-{model}-{ts}"

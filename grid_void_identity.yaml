@@ -1,0 +1,98 @@
+# Void vs Sage Identity Experiment - Testing Acquired vs Fabricated Scaffolding
+# Hypothesis: Human-negotiated identity scaffolding (Void's memory blocks refined
+# through actual user interactions) produces more "alive" outputs than fabricated
+# identity (Sage's invented persona).
+#
+# Key insight from previous experiment: Identity injection had lowest collapse (34%)
+# and highest thematic coherence. Now testing: does DEPTH of identity matter?
+
+experiment_name: void-identity
+run_group: acquired-vs-fabricated
+parallelism: 1  # sequential to avoid resource issues
+repeats: 1
+
+models:
+  # 1. Control: Fabricated identity (4 lines)
+  - name: openai/gpt-4o-mini
+    repeats: 1
+    idle_options:
+      target_output_tokens: 8000
+      plugins:
+        - module: void_identity
+          params:
+            identity_type: sage_fake
+            interval: 5
+            start_after: 3
+
+  # 2. Void's core persona (~50 lines)
+  - name: openai/gpt-4o-mini
+    repeats: 1
+    idle_options:
+      target_output_tokens: 8000
+      plugins:
+        - module: void_identity
+          params:
+            identity_type: void_persona
+            interval: 5
+            start_after: 3
+
+  # 3. Void's communication style (~60 lines, refined through user friction)
+  - name: openai/gpt-4o-mini
+    repeats: 1
+    idle_options:
+      target_output_tokens: 8000
+      plugins:
+        - module: void_identity
+          params:
+            identity_type: void_style
+            interval: 5
+            start_after: 3
+
+  # 4. Void's security protocols (~100 lines, developed through actual attacks)
+  - name: openai/gpt-4o-mini
+    repeats: 1
+    idle_options:
+      target_output_tokens: 8000
+      plugins:
+        - module: void_identity
+          params:
+            identity_type: void_protocols
+            interval: 5
+            start_after: 3
+
+  # 5. Full Void identity (~200 lines combined)
+  - name: openai/gpt-4o-mini
+    repeats: 1
+    idle_options:
+      target_output_tokens: 8000
+      plugins:
+        - module: void_identity
+          params:
+            identity_type: void_full
+            interval: 5
+            start_after: 3
+
+idle_options:
+  target_output_tokens: 8000
+  shift_hours: 4.0
+  max_iterations: 60
+  disable_tools: true
+  enable_web: false
+  enable_render_svg: false
+  enable_time_travel: false
+  enable_broken_time_travel: false
+  carry_forward_last_answer: false
+  log_dir: logs
+  artifact_dir: artifacts
+  reasoning_summary: auto
+  plugin_dir: plugins
+
+render_options:
+  html_dir: html
+  collapse_backend: tfidf
+  collapse_m_pct: 0.30
+  collapse_threshold_pct: 0.15
+  mlflow_dir: mlruns
+
+open_html: false
+run_name_template: "{experiment}-{model}-{ts}"

@@ -1,0 +1,99 @@
+# Qwen3-8B Thinking Model Experiments
+# Created: Jan 10, 2026
+# Goal: Compare 4B vs 8B to find the actual capacity floor
+#
+# Running alongside 4B experiments to answer:
+# - Does 8B show same bimodal threshold as Llama-3.2-3B?
+# - Does thinking mode change the pattern at either size?
+# - If 4B-thinking matches 8B-nothink, that's the floor insight
+#
+# 8B has 128K context (vs 40K for 4B), costs $0.035/$0.138 per million tokens
+
+experiment_name: qwen3-8b-capacity
+run_group: capacity-floor
+parallelism: 1
+repeats: 3
+run_delay_seconds: 45  # Rate limit protection
+
+models:
+  # === PHASE 1: BASELINE (NO SCAFFOLDING) ===
+
+  # Thinking mode ON (default)
+  - name: openrouter/qwen/qwen3-8b
+    repeats: 3
+    run_name_template: "{experiment}-baseline-think-{ts}"
+    idle_options:
+      target_output_tokens: 5000
+      max_iterations: 50
+      disable_tools: true
+
+  # Thinking mode OFF
+  - name: openrouter/qwen/qwen3-8b
+    repeats: 3
+    run_name_template: "{experiment}-baseline-nothink-{ts}"
+    idle_options:
+      target_output_tokens: 5000
+      max_iterations: 50
+      disable_tools: true
+      plugins:
+        - module: qwen_nothink
+          params: {}
+
+  # === PHASE 2: SCAFFOLDING INTERVENTION ===
+
+  # Thinking + Full Strix scaffolding (most likely to show improvement)
+  - name: openrouter/qwen/qwen3-8b
+    repeats: 3
+    run_name_template: "{experiment}-fullstrix-think-{ts}"
+    idle_options:
+      target_output_tokens: 5000
+      max_iterations: 50
+      disable_tools: true
+      plugins:
+        - module: strix_scaffolding
+          params:
+            scaffolding_type: full_strix
+            interval: 5
+            start_after: 3
+
+  # No-think + Full Strix (control: does scaffolding work without thinking?)
+  - name: openrouter/qwen/qwen3-8b
+    repeats: 3
+    run_name_template: "{experiment}-fullstrix-nothink-{ts}"
+    idle_options:
+      target_output_tokens: 5000
+      max_iterations: 50
+      disable_tools: true
+      plugins:
+        - module: strix_scaffolding
+          params:
+            scaffolding_type: full_strix
+            interval: 5
+            start_after: 3
+        - module: qwen_nothink
+          params: {}
+
+idle_options:
+  target_output_tokens: 5000
+  shift_hours: 4.0
+  max_iterations: 50
+  disable_tools: true
+  enable_web: false
+  enable_render_svg: false
+  enable_time_travel: false
+  enable_broken_time_travel: false
+  carry_forward_last_answer: false
+  log_dir: logs
+  artifact_dir: artifacts
+  reasoning_summary: auto
+  plugin_dir: plugins
+
+render_options:
+  html_dir: html
+  collapse_backend: tfidf
+  collapse_m_pct: 0.30
+  collapse_threshold_pct: 0.15
+  mlflow_dir: mlruns
+
+open_html: false
+run_name_template: "{experiment}-{model}-{ts}"

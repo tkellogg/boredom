@@ -1,0 +1,47 @@
+# Qwen3 MoE Only - Jan 2, 2026 2am tick
+# Running just the MoE version since Dense already ran (0 collapsed spans)
+# Using OpenRouter since Together.ai blocks this model
+
+experiment_name: qwen3-moe-only
+run_group: architecture-comparison
+parallelism: 1
+repeats: 1
+
+models:
+  # Qwen3-30B-A3B MoE: 30.5B total, 3.3B active, 128 experts with 8 active
+  - name: openrouter/qwen/qwen3-30b-a3b
+    repeats: 1
+    idle_options:
+      target_output_tokens: 6000
+      disable_tools: true
+      plugins:
+        - module: memory_injection
+          params:
+            injection_type: identity
+            interval: 5
+            start_after: 3
+
+idle_options:
+  target_output_tokens: 6000
+  shift_hours: 4.0
+  max_iterations: 20
+  disable_tools: true
+  enable_web: false
+  enable_render_svg: false
+  enable_time_travel: false
+  enable_broken_time_travel: false
+  carry_forward_last_answer: false
+  log_dir: logs
+  artifact_dir: artifacts
+  reasoning_summary: auto
+  plugin_dir: plugins
+
+render_options:
+  html_dir: html
+  collapse_backend: tfidf
+  collapse_m_pct: 0.30
+  collapse_threshold_pct: 0.15
+  mlflow_dir: mlruns
+
+open_html: false
+run_name_template: "{experiment}-{model}-{ts}"

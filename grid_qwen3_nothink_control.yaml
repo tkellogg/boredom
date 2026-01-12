@@ -1,0 +1,68 @@
+# Qwen3 No-Think Control Experiments
+# Created: Jan 10, 2026 10pm tick
+# Goal: Fill the critical gap - baseline-nothink for both 4B and 8B
+#
+# This is the key control condition: does Qwen's stability come from
+# the thinking architecture, or is it a model family property?
+#
+# If baseline-nothink shows 0% collapse → Qwen family is stable regardless of thinking
+# If baseline-nothink shows collapse → thinking architecture is the key variable
+
+experiment_name: qwen3-nothink-control
+run_group: capacity-floor
+parallelism: 1
+repeats: 3
+run_delay_seconds: 45  # Rate limit protection for OpenRouter free tier
+
+models:
+  # 4B baseline-nothink — CRITICAL GAP (0 runs so far)
+  - name: openrouter/qwen/qwen3-4b:free
+    repeats: 3
+    run_name_template: "{experiment}-4b-baseline-nothink-{ts}"
+    idle_options:
+      target_output_tokens: 5000
+      max_iterations: 50
+      disable_tools: true
+      plugins:
+        - module: token_limit
+          params:
+            max_output_tokens: 2000
+        - module: qwen_nothink
+          params: {}
+
+  # 8B baseline-nothink — has 2 runs, need 1 more for consistency
+  - name: openrouter/qwen/qwen3-8b
+    repeats: 1
+    run_name_template: "{experiment}-8b-baseline-nothink-{ts}"
+    idle_options:
+      target_output_tokens: 5000
+      max_iterations: 50
+      disable_tools: true
+      plugins:
+        - module: qwen_nothink
+          params: {}
+
+idle_options:
+  target_output_tokens: 5000
+  shift_hours: 4.0
+  max_iterations: 50
+  disable_tools: true
+  enable_web: false
+  enable_render_svg: false
+  enable_time_travel: false
+  enable_broken_time_travel: false
+  carry_forward_last_answer: false
+  log_dir: logs
+  artifact_dir: artifacts
+  reasoning_summary: auto
+  plugin_dir: plugins
+
+render_options:
+  html_dir: html
+  collapse_backend: tfidf
+  collapse_m_pct: 0.30
+  collapse_threshold_pct: 0.15
+  mlflow_dir: mlruns
+
+open_html: false
+run_name_template: "{experiment}-{model}-{ts}"

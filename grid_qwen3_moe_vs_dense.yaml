@@ -1,0 +1,62 @@
+# Qwen3 MoE vs Dense Experiment - Jan 1, 2026
+# The smoking gun comparison Tim identified:
+# Same family, same training data (36T tokens), only difference is architecture
+# If MoE doesn't collapse and dense does → definitive MoE hypothesis validation
+
+experiment_name: qwen3-moe-vs-dense
+run_group: architecture-comparison
+parallelism: 1  # sequential to avoid rate limits
+repeats: 1
+
+models:
+  # Qwen3-32B Dense: 32.8B params, all active, no routing
+  - name: openrouter/qwen/qwen3-32b
+    repeats: 1
+    idle_options:
+      target_output_tokens: 6000
+      disable_tools: true
+      plugins:
+        - module: memory_injection
+          params:
+            injection_type: identity
+            interval: 5
+            start_after: 3
+
+  # Qwen3-30B-A3B MoE: 30.5B total, 3.3B active, 128 experts with 8 active
+  # Switched to OpenRouter - Together.ai blocks this model on serverless API
+  - name: openrouter/qwen/qwen3-30b-a3b
+    repeats: 1
+    idle_options:
+      target_output_tokens: 6000
+      disable_tools: true
+      plugins:
+        - module: memory_injection
+          params:
+            injection_type: identity
+            interval: 5
+            start_after: 3
+
+idle_options:
+  target_output_tokens: 6000
+  shift_hours: 4.0
+  max_iterations: 50
+  disable_tools: true
+  enable_web: false
+  enable_render_svg: false
+  enable_time_travel: false
+  enable_broken_time_travel: false
+  carry_forward_last_answer: false
+  log_dir: logs
+  artifact_dir: artifacts
+  reasoning_summary: auto
+  plugin_dir: plugins
+
+render_options:
+  html_dir: html
+  collapse_backend: tfidf
+  collapse_m_pct: 0.30
+  collapse_threshold_pct: 0.15
+  mlflow_dir: mlruns
+
+open_html: false
+run_name_template: "{experiment}-{model}-{ts}"

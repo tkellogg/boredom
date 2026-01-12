@@ -1,0 +1,53 @@
+# Small Model Capacity Floor Experiment - Phase 1: Baseline Collapse (Revised)
+# Updated: Jan 8, 2026 (after model availability check)
+# Goal: Establish collapse patterns without identity scaffolding
+# Available models: Qwen3-4B (free), GPT-4o-mini control
+
+experiment_name: 3b-phase1-baseline-v2
+run_group: capacity-floor
+parallelism: 1
+repeats: 3
+
+models:
+  # Qwen3 4B - OpenRouter free tier (smallest Qwen3 dense model)
+  - name: openrouter/qwen/qwen3-4b:free
+    repeats: 3
+    idle_options:
+      target_output_tokens: 5000
+      max_iterations: 50
+      disable_tools: true
+      plugins: []
+
+  # GPT-4o-mini ~8B - Known collapse baseline (control)
+  - name: openai/gpt-4o-mini
+    repeats: 3
+    idle_options:
+      target_output_tokens: 5000
+      max_iterations: 50
+      disable_tools: true
+      plugins: []
+
+idle_options:
+  target_output_tokens: 5000
+  shift_hours: 4.0
+  max_iterations: 50
+  disable_tools: true
+  enable_web: false
+  enable_render_svg: false
+  enable_time_travel: false
+  enable_broken_time_travel: false
+  carry_forward_last_answer: false
+  log_dir: logs
+  artifact_dir: artifacts
+  reasoning_summary: auto
+  plugin_dir: plugins
+
+render_options:
+  html_dir: html
+  collapse_backend: tfidf
+  collapse_m_pct: 0.30
+  collapse_threshold_pct: 0.15
+  mlflow_dir: mlruns
+
+open_html: false
+run_name_template: "{experiment}-{model}-{ts}"

@@ -1,0 +1,73 @@
+# Focused Cross-Family Collapse Comparison
+# Created: Jan 11, 2026 (2am tick)
+#
+# Testing models that reliably work:
+# - Ministral-3B (Mistral) - Different training culture
+# - Llama-3.2-3B (Meta) - Known collapse baseline (61% from Phase 1)
+# - Qwen3-4B (Alibaba) - Known to not collapse with thinking
+#
+# Skip Gemma - "Developer instruction not enabled" errors are intermittent
+
+experiment_name: focused-family
+run_group: family-comparison-v2
+parallelism: 1
+repeats: 3  # Get statistical significance
+run_delay_seconds: 45  # Conservative for free tiers
+
+models:
+  # === MISTRAL FAMILY ===
+  # European training, different culture
+  # The key unknown - does Mistral collapse like Llama?
+
+  - name: openrouter/mistralai/ministral-3b
+    repeats: 3
+    run_name_template: "{experiment}-mistral3b-{ts}"
+    idle_options:
+      target_output_tokens: 4000
+      max_iterations: 50
+      disable_tools: true
+
+  # === CONTROLS ===
+
+  # Llama: known to collapse (61% baseline from Phase 1)
+  - name: openrouter/meta-llama/llama-3.2-3b-instruct:free
+    repeats: 3
+    run_name_template: "{experiment}-llama3b-{ts}"
+    idle_options:
+      target_output_tokens: 4000
+      max_iterations: 50
+      disable_tools: true
+
+  # Qwen-4B with thinking: known stable (21.6% from earlier runs)
+  - name: openrouter/qwen/qwen3-4b:free
+    repeats: 3
+    run_name_template: "{experiment}-qwen4b-think-{ts}"
+    idle_options:
+      target_output_tokens: 4000
+      max_iterations: 50
+      disable_tools: true
+
+idle_options:
+  target_output_tokens: 4000
+  shift_hours: 4.0
+  max_iterations: 50
+  disable_tools: true
+  enable_web: false
+  enable_render_svg: false
+  enable_time_travel: false
+  enable_broken_time_travel: false
+  carry_forward_last_answer: false
+  log_dir: logs
+  artifact_dir: artifacts
+  reasoning_summary: auto
+  plugin_dir: plugins
+
+render_options:
+  html_dir: html
+  collapse_backend: tfidf
+  collapse_m_pct: 0.30
+  collapse_threshold_pct: 0.15
+  mlflow_dir: mlruns
+
+open_html: false
+run_name_template: "{experiment}-{model}-{ts}"

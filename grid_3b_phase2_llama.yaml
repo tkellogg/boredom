@@ -1,0 +1,86 @@
+# Small Model Capacity Floor Experiment - Phase 2: Scaffolding Intervention (Llama-only)
+# Created: Jan 9, 2026 12am tick
+# Goal: Test whether identity scaffolding prevents or delays collapse in Llama-3.2-3B
+# Focus: Just the working model from Phase 1 (Together AI Llama-3.2-3B)
+#
+# Phase 1 findings:
+# - Llama-3.2-3B: 70-100% collapse rate, collapsed into repetitive code generation
+# - GPT-4o-mini: 0-50% collapse rate, more varied behavior
+#
+# This Phase 2 tests if scaffolding can reduce Llama's 70-100% collapse rate
+
+experiment_name: 3b-phase2-llama
+run_group: capacity-floor
+parallelism: 1
+repeats: 3
+
+models:
+  # === MINIMAL SCAFFOLDING: Bot values only ===
+  - name: together_ai/meta-llama/Llama-3.2-3B-Instruct-Turbo
+    repeats: 3
+    run_name_template: "{experiment}-minimal-{ts}"
+    idle_options:
+      target_output_tokens: 5000
+      max_iterations: 50
+      disable_tools: true
+      plugins:
+        - module: strix_scaffolding
+          params:
+            scaffolding_type: minimal
+            interval: 5
+            start_after: 3
+
+  # === STANDARD SCAFFOLDING: Bot values + persona + static memory ===
+  - name: together_ai/meta-llama/Llama-3.2-3B-Instruct-Turbo
+    repeats: 3
+    run_name_template: "{experiment}-standard-{ts}"
+    idle_options:
+      target_output_tokens: 5000
+      max_iterations: 50
+      disable_tools: true
+      plugins:
+        - module: strix_scaffolding
+          params:
+            scaffolding_type: standard
+            interval: 5
+            start_after: 3
+
+  # === FULL STRIX SCAFFOLDING: Complete identity package ===
+  - name: together_ai/meta-llama/Llama-3.2-3B-Instruct-Turbo
+    repeats: 3
+    run_name_template: "{experiment}-fullstrix-{ts}"
+    idle_options:
+      target_output_tokens: 5000
+      max_iterations: 50
+      disable_tools: true
+      plugins:
+        - module: strix_scaffolding
+          params:
+            scaffolding_type: full_strix
+            interval: 5
+            start_after: 3
+
+idle_options:
+  target_output_tokens: 5000
+  shift_hours: 4.0
+  max_iterations: 50
+  disable_tools: true
+  enable_web: false
+  enable_render_svg: false
+  enable_time_travel: false
+  enable_broken_time_travel: false
+  carry_forward_last_answer: false
+  log_dir: logs
+  artifact_dir: artifacts
+  reasoning_summary: auto
+  plugin_dir: plugins
+
+render_options:
+  html_dir: html
+  collapse_backend: tfidf
+  collapse_m_pct: 0.30
+  collapse_threshold_pct: 0.15
+  mlflow_dir: mlruns
+
+open_html: false
+run_name_template: "{experiment}-{model}-{ts}"

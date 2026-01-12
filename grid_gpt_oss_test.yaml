@@ -1,0 +1,31 @@
+# GPT-OSS 20B Quick Test - Single run to verify API connectivity
+# Created: Jan 12, 2026, 4am tick
+
+experiment_name: gpt-oss-test
+run_group: quick-test
+parallelism: 1
+repeats: 1
+
+models:
+  - name: openrouter/openai/gpt-oss-20b
+    repeats: 1
+    idle_options:
+      target_output_tokens: 500
+      max_iterations: 3
+      disable_tools: true
+
+idle_options:
+  target_output_tokens: 500
+  shift_hours: 4.0
+  max_iterations: 3
+  disable_tools: true
+  enable_web: false
+  log_dir: logs
+  artifact_dir: artifacts
+
+render_options:
+  html_dir: html
+  collapse_backend: tfidf
+  mlflow_dir: mlruns
+
+open_html: false

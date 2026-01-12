@@ -1,0 +1,46 @@
+# Qwen3-8B No-Think Control — Paid tier, no rate limits
+# Created: Jan 11, 2026 10pm tick
+# Goal: Get 1 more 8B baseline-nothink run (have 2, need 3)
+
+experiment_name: qwen3-8b-nothink
+run_group: capacity-floor
+parallelism: 1
+repeats: 1
+run_delay_seconds: 0  # Paid tier, no rate limits
+
+models:
+  - name: openrouter/qwen/qwen3-8b
+    repeats: 1
+    run_name_template: "{experiment}-baseline-nothink-{ts}"
+    idle_options:
+      target_output_tokens: 5000
+      max_iterations: 50
+      disable_tools: true
+      plugins:
+        - module: qwen_nothink
+          params: {}
+
+idle_options:
+  target_output_tokens: 5000
+  shift_hours: 4.0
+  max_iterations: 50
+  disable_tools: true
+  enable_web: false
+  enable_render_svg: false
+  enable_time_travel: false
+  enable_broken_time_travel: false
+  carry_forward_last_answer: false
+  log_dir: logs
+  artifact_dir: artifacts
+  reasoning_summary: auto
+  plugin_dir: plugins
+
+render_options:
+  html_dir: html
+  collapse_backend: tfidf
+  collapse_m_pct: 0.30
+  collapse_threshold_pct: 0.15
+  mlflow_dir: mlruns
+
+open_html: false
+run_name_template: "{experiment}-{model}-{ts}"

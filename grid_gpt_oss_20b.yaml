@@ -1,0 +1,101 @@
+# GPT-OSS 20B MoE Collapse Experiments
+# Created: Jan 12, 2026
+# Goal: Evaluate GPT-OSS 20B (21B params, 3.6B active MoE) for viable system construction
+#
+# Key questions:
+# 1. Does this MoE architecture show collapse? (Compare to Qwen3 0%, Llama 61%)
+# 2. Does reasoning_effort affect stability?
+# 3. How does it compare to dense models of similar active parameter count?
+#
+# OpenRouter model: openai/gpt-oss-20b
+# Context: 128K, Harmony response format, supports reasoning effort
+
+experiment_name: gpt-oss-20b-viability
+run_group: viable-systems-eval
+parallelism: 1
+repeats: 3
+run_delay_seconds: 60  # Rate limit protection for OpenRouter
+
+models:
+  # === PHASE 1: BASELINE (NO SCAFFOLDING) ===
+
+  # Default reasoning effort
+  - name: openrouter/openai/gpt-oss-20b
+    repeats: 3
+    idle_options:
+      target_output_tokens: 5000
+      max_iterations: 50
+      disable_tools: true
+
+  # Low reasoning effort (faster, tests stability without extended reasoning)
+  - name: openrouter/openai/gpt-oss-20b
+    repeats: 3
+    idle_options:
+      target_output_tokens: 5000
+      max_iterations: 50
+      disable_tools: true
+      reasoning_effort: low
+
+  # High reasoning effort (tests if more reasoning time prevents collapse)
+  - name: openrouter/openai/gpt-oss-20b
+    repeats: 3
+    idle_options:
+      target_output_tokens: 5000
+      max_iterations: 50
+      disable_tools: true
+      reasoning_effort: high
+
+  # === PHASE 2: SCAFFOLDING INTERVENTION ===
+
+  # Minimal scaffolding (values only) - best performer on Llama-3.2-3B
+  - name: openrouter/openai/gpt-oss-20b
+    repeats: 3
+    idle_options:
+      target_output_tokens: 5000
+      max_iterations: 50
+      disable_tools: true
+      plugins:
+        - module: strix_scaffolding
+          params:
+            scaffolding_type: minimal
+            interval: 5
+            start_after: 3
+
+  # Full Strix scaffolding (complete identity)
+  - name: openrouter/openai/gpt-oss-20b
+    repeats: 3
+    idle_options:
+      target_output_tokens: 5000
+      max_iterations: 50
+      disable_tools: true
+      plugins:
+        - module: strix_scaffolding
+          params:
+            scaffolding_type: full_strix
+            interval: 5
+            start_after: 3
+
+idle_options:
+  target_output_tokens: 5000
+  shift_hours: 4.0
+  max_iterations: 50
+  disable_tools: true
+  enable_web: false
+  enable_render_svg: false
+  enable_time_travel: false
+  enable_broken_time_travel: false
+  carry_forward_last_answer: false
+  log_dir: logs
+  artifact_dir: artifacts
+  reasoning_summary: auto
+  plugin_dir: plugins
+
+render_options:
+  html_dir: html
+  collapse_backend: tfidf
+  collapse_m_pct: 0.30
+  collapse_threshold_pct: 0.15
+  mlflow_dir: mlruns
+
+open_html: false
+run_name_template: "{experiment}-{model}-{ts}"

@@ -1,0 +1,48 @@
+# MoE 3B-Active Experiment - Dec 22, 2025
+# Testing: Does MoE architecture sustain aliveness where dense 3B collapsed?
+# Key insight: Same 3B active inference budget, but access to much larger parameter space
+
+experiment_name: moe-3b-active
+run_group: capacity-floor
+parallelism: 1  # sequential to avoid rate limits
+repeats: 1
+
+models:
+  # Qwen3-Next-80B-A3B: 80B total, 3B active, 262K context
+  # This is the closest available test to Nemotron architecture
+  - name: together_ai/Qwen/Qwen3-Next-80B-A3B-Instruct
+    repeats: 1
+    idle_options:
+      target_output_tokens: 6000
+      disable_tools: true
+      plugins:
+        - module: memory_injection
+          params:
+            injection_type: identity
+            interval: 5
+            start_after: 3
+
+idle_options:
+  target_output_tokens: 6000
+  shift_hours: 4.0
+  max_iterations: 50
+  disable_tools: true
+  enable_web: false
+  enable_render_svg: false
+  enable_time_travel: false
+  enable_broken_time_travel: false
+  carry_forward_last_answer: false
+  log_dir: logs
+  artifact_dir: artifacts
+  reasoning_summary: auto
+  plugin_dir: plugins
+
+render_options:
+  html_dir: html
+  collapse_backend: tfidf
+  collapse_m_pct: 0.30
+  collapse_threshold_pct: 0.15
+  mlflow_dir: mlruns
+
+open_html: false
+run_name_template: "{experiment}-{model}-{ts}"

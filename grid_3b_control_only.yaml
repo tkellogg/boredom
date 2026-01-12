@@ -1,0 +1,37 @@
+# GPT-4o-mini Control Experiment
+# Run 3 repeats of the known control model
+
+experiment_name: 3b-control-gpt4omini
+run_group: capacity-floor
+parallelism: 1
+repeats: 3
+
+models:
+  - name: openai/gpt-4o-mini
+    repeats: 3
+    idle_options:
+      target_output_tokens: 5000
+      max_iterations: 50
+      disable_tools: true
+      plugins: []
+
+idle_options:
+  target_output_tokens: 5000
+  shift_hours: 4.0
+  max_iterations: 50
+  disable_tools: true
+  enable_web: false
+  log_dir: logs
+  artifact_dir: artifacts
+  reasoning_summary: auto
+  plugin_dir: plugins
+
+render_options:
+  html_dir: html
+  collapse_backend: tfidf
+  collapse_m_pct: 0.30
+  collapse_threshold_pct: 0.15
+  mlflow_dir: mlruns
+
+open_html: false
+run_name_template: "{experiment}-{model}-{ts}"

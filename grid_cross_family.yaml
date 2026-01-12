@@ -24,19 +24,21 @@ models:
   # === GEMMA FAMILY ===
   # Key test: does Google's architecture collapse?
 
-  - name: openrouter/google/gemma-3-4b-it:free
+  # NOTE: Gemma free tier has "Developer instruction is not enabled" error
+  # Using paid tier instead ($0.02-0.03/M, very cheap)
+  - name: openrouter/google/gemma-3-4b-it
     repeats: 2
     run_name_template: "{experiment}-gemma4b-{ts}"
     idle_options:
-      target_output_tokens: 4000  # Lower for 32K context
+      target_output_tokens: 4000  # Lower for 96K context
       max_iterations: 50
       disable_tools: true
 
-  - name: openrouter/google/gemma-3-12b-it:free
+  - name: openrouter/google/gemma-3-12b-it
     repeats: 2
     run_name_template: "{experiment}-gemma12b-{ts}"
     idle_options:
-      target_output_tokens: 4000
+      target_output_tokens: 4000  # 131K context
       max_iterations: 50
       disable_tools: true
 
