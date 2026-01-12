@@ -28,10 +28,61 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+import urllib.request
+import urllib.error
 
 # Force minimal memory for embeddings
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 os.environ.setdefault("BOREDOM_TS_DISABLE", "1")  # Disable MLflow time series (OOM risk)
+
+# Discord notification config - load from adhd-assistant .env
+ADHD_ENV = Path.home() / "adhd-assistant" / ".env"
+DISCORD_TOKEN = None
+DISCORD_USER_ID = None
+if ADHD_ENV.exists():
+    for line in ADHD_ENV.read_text().splitlines():
+        if line.startswith("DISCORD_TOKEN="):
+            DISCORD_TOKEN = line.split("=", 1)[1]
+        elif line.startswith("YOUR_USER_ID="):
+            DISCORD_USER_ID = line.split("=", 1)[1]
+
+
+def notify_discord(message: str) -> bool:
+    """Send a notification to Tim via Discord DM. Returns True on success."""
+    if not DISCORD_TOKEN or not DISCORD_USER_ID:
+        print("Discord notification skipped: missing DISCORD_TOKEN or YOUR_USER_ID")
+        return False
+
+    try:
+        # First, create/get DM channel
+        dm_req = urllib.request.Request(
+            "https://discord.com/api/v10/users/@me/channels",
+            data=json.dumps({"recipient_id": DISCORD_USER_ID}).encode("utf-8"),
+            headers={
+                "Authorization": f"Bot {DISCORD_TOKEN}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(dm_req, timeout=10) as resp:
+            dm_data = json.loads(resp.read().decode("utf-8"))
+            channel_id = dm_data["id"]
+
+        # Send message to DM channel
+        msg_req = urllib.request.Request(
+            f"https://discord.com/api/v10/channels/{channel_id}/messages",
+            data=json.dumps({"content": message}).encode("utf-8"),
+            headers={
+                "Authorization": f"Bot {DISCORD_TOKEN}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(msg_req, timeout=10) as resp:
+            return resp.status == 200
+    except Exception as e:
+        print(f"Discord notification failed: {e}")
+        return False
 
 ROOT = Path(__file__).parent.resolve()
 RESULTS_DIR = ROOT / "results" / "scaffold_grid"
@@ -521,6 +572,11 @@ def run_grid(
     # Print summary
     print_summary(state)
 
+    # Notify completion
+    completed = sum(1 for c in state["cells"].values() if c["status"] == "completed")
+    failed = sum(1 for c in state["cells"].values() if c["status"] == "failed")
+    notify_discord(f"🦉 Scaffold grid finished! {completed} completed, {failed} failed. Results in {RESULTS_DIR}")
+
 
 def print_summary(state: Dict[str, Any]) -> None:
     """Print grid summary."""
@@ -583,4 +639,12 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        import traceback
+        error_msg = f"🔥 Scaffold grid CRASHED: {type(e).__name__}: {e}"
+        print(error_msg)
+        traceback.print_exc()
+        notify_discord(error_msg)
+        raise
